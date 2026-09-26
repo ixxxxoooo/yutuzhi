@@ -13,6 +13,9 @@ import { createLocator } from './locator.js';
 import { createBasemap, createLayerUI } from './basemap.js';
 import { getSaveButtonLabel, generateMapPoster } from './export-map.js';
 import { $, esc, narrowScreen } from './dom.js';
+import { inject } from '@vercel/analytics';
+
+inject();
 
 const svg = $('#map');
 const basemapCanvas = $('#basemap');
