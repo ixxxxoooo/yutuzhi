@@ -75,12 +75,15 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 /* ============ 通用按钮 ============ */
 .btn {
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  padding: 6px 12px; border: 2px solid var(--ink); border-radius: 7px; background: #fff;
+  padding: 6px 12px; border: 2px solid var(--ink); border-radius: 8px; background: #fff;
   color: var(--ink); text-decoration: none;
   box-shadow: 2px 3px 0 var(--shadow);
 }
 .btn:active { transform: translateY(1px); box-shadow: none; }
 .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.btn-primary {
+  background: var(--ink); color: #fff; font-weight: bold; padding: 6px 14px;
+}
 
 #city-list button, .loc-grid button, .loc-head button, .loc-list button {
   border: 1.5px solid var(--ink); border-radius: 6px; background: #fff;
@@ -696,6 +699,51 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 [data-basemap-dark] .labels circle,
 [data-basemap-dark] .town-labels circle { fill: #0f172a; stroke: #fff; }
 
+/* ---------- 地图导出预览弹窗 (#export-modal) ---------- */
+#export-modal {
+  position: fixed; inset: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.export-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(15, 23, 42, .48);
+  backdrop-filter: blur(4px);
+}
+.export-card {
+  position: relative; z-index: 1;
+  width: min(820px, 100%); max-height: min(90vh, 880px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--paper); border: 2.5px solid var(--ink); border-radius: 14px;
+  box-shadow: 6px 10px 0 rgba(0, 0, 0, .24);
+}
+.export-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; background: #fff; border-bottom: 2px solid var(--ink);
+}
+.export-head b { font-size: 18px; }
+.export-close {
+  width: 32px; height: 32px; border: 1.5px solid var(--ink); border-radius: 7px;
+  background: #fff; font-size: 20px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.export-preview {
+  flex: 1; min-height: 0; overflow: auto;
+  padding: 16px; display: flex; align-items: center; justify-content: center;
+  background: var(--soft);
+}
+.export-preview img {
+  max-width: 100%; max-height: calc(90vh - 165px);
+  height: auto; display: block;
+  border-radius: 8px; border: 1.5px solid var(--divider);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .1);
+}
+.export-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; background: #fff; border-top: 2px solid var(--ink);
+}
+.export-tip { font-size: 13px; color: var(--muted); }
+.export-actions { display: flex; align-items: center; gap: 10px; }
+
 /* ============ 悬停辅助 ============ */
 @media (hover: hover) {
   [data-view="province"] .crumb-root:hover,
@@ -709,7 +757,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   [data-basemap-dark] #crumb:has(#crumb-city:not([hidden])) #crumb-province .crumb-leaf:hover,
   [data-basemap-dark] #crumb:has(#crumb-county:not([hidden])) #crumb-city .crumb-leaf:hover { color: #fff; }
   .layer-card:not(.active):hover, .layer-toggle:not(.active):hover { background: var(--hover); }
-  #topbar .btn:hover { background: var(--hl-fill); }
+  #topbar .btn:not(.btn-primary):hover, .export-close:hover { background: var(--hl-fill); }
+  .btn-primary:hover { background: #38352f; color: var(--hl-fill); }
   .loc-grid button:hover, .loc-list button:hover, .loc-head button:hover { background: var(--hl-fill); }
 }
 
@@ -727,10 +776,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   #crumb-province, #crumb-city, #crumb-county { font-size: 18px; }
   .search { flex: none; width: 38px; padding: 0 8px; margin-left: auto; cursor: pointer; }
   .search input { width: 0; }
-  #topbar.searching #crumb, #topbar.searching #layer-btn, #topbar.searching #github-btn { display: none; }
+  #topbar.searching #crumb, #topbar.searching #layer-btn, #topbar.searching #github-btn, #topbar.searching #save-btn { display: none; }
   #topbar.searching .search { flex: 1; width: auto; }
   #layer-btn { margin-left: 0; flex: none; justify-content: center; width: 38px; padding: 0; }
   #layer-btn span { display: none; }
+  #save-btn { padding: 0 10px; font-size: 13px; }
 
   #panel {
     top: auto; left: var(--gap); right: var(--gap); bottom: max(var(--gap), env(safe-area-inset-bottom));
@@ -742,6 +792,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
   #locator { left: 8px !important; right: 8px; width: auto; max-height: 72vh; }
   #layer-menu { right: 8px; left: 8px; width: auto; }
+  #export-modal { padding: 10px; }
+  .export-foot { flex-direction: column; align-items: stretch; }
+  .export-actions { justify-content: flex-end; }
 
   .panel-handle {
     display: flex; justify-content: center; align-items: center; flex: none;

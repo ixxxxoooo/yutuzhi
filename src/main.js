@@ -11,6 +11,7 @@ import { layoutLabels, leaderEnd } from './label-layout.js';
 import { attachGestures } from './gesture.js';
 import { createLocator } from './locator.js';
 import { createBasemap, createLayerUI } from './basemap.js';
+import { getSaveButtonLabel, generateMapPoster } from './export-map.js';
 import { $, esc, narrowScreen } from './dom.js';
 
 const svg = $('#map');
@@ -22,6 +23,12 @@ const subHint = $('#sub-hint');
 const cityListEl = $('#city-list');
 const sanshaCard = $('#sansha-card');
 const sanshaSvg = sanshaCard.querySelector('svg');
+const saveBtn = $('#save-btn');
+const saveBtnLabel = $('#save-btn-label');
+const exportModal = $('#export-modal');
+const exportModalTitle = $('#export-modal-title');
+const exportImg = $('#export-img');
+const exportDownload = $('#export-download');
 const root = document.documentElement;
 
 const LABEL_PX = 13;       // 省视图地级市名、市视图区县名、区县视图乡镇名的基准屏幕字号
@@ -659,6 +666,13 @@ const flyTo = async () => {
   syncDetail();
 };
 
+const syncSaveBtnLabel = () => {
+  if (!saveBtnLabel) return;
+  const label = getSaveButtonLabel({ activeProvince, activeCity, activeCounty });
+  saveBtnLabel.textContent = label;
+  saveBtn.title = `${label}（高清 PNG）`;
+};
+
 const clearTownLayer = () => {
   renderCountyTowns(svg, null);
   svg.querySelector(':scope > .town-labels')?.replaceChildren();
@@ -690,6 +704,7 @@ const enterProvince = async code => {
   document.title = `${p.name} · YuTuZhi 舆图志`;
   sanshaCard.hidden = !unitsOf(code).some(u => isSansha(u.code));
   placeSanshaCard();
+  syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
   home = provinceFit(code);
@@ -729,6 +744,7 @@ const enterCity = async cityCode => {
   document.title = `${p.direct ? p.name : `${p.name} · ${c.name}`} · YuTuZhi 舆图志`;
   sanshaCard.hidden = !unitsOfCity(c.code).some(u => isSansha(u.code));
   placeSanshaCard();
+  syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
   home = cityFit(c.code);
@@ -780,6 +796,7 @@ const enterCounty = async unitCode => {
   document.title = `${p.name} · ${u.name} · YuTuZhi 舆图志`;
 
   sanshaCard.hidden = true;
+  syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
   home = countyFit(u.code);
@@ -803,6 +820,7 @@ const showCountry = async () => {
   sanshaCard.hidden = true;
   for (const g of svg.querySelectorAll('.active')) g.classList.remove('active');
   for (const u of svg.querySelectorAll('.unit.active-county')) u.classList.remove('active-county');
+  syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
   home = countryFit();
@@ -915,6 +933,51 @@ const locator = createLocator({
   getActiveCounty: () => activeCounty,
 });
 
+// ---------- 导出当前区域高清舆图海报 ----------
+let lastExportUrl = null;
+const closeExportModal = () => {
+  exportModal.hidden = true;
+};
+
+exportModal.addEventListener('click', e => {
+  if (e.target.closest('[data-close-export]')) closeExportModal();
+});
+
+saveBtn.addEventListener('click', async () => {
+  if (saveBtn.disabled) return;
+  locator.close();
+  layerUI.close();
+  hoverCard.hidden = true;
+
+  const originalLabel = getSaveButtonLabel({ activeProvince, activeCity, activeCounty });
+  saveBtn.disabled = true;
+  saveBtnLabel.textContent = '正在生成…';
+
+  try {
+    await loadFine();
+    setDetail(svg, 'fine');
+    const regionInfo = getRegionData(defaultInfoTarget());
+    const { url, filename } = await generateMapPoster({
+      svg,
+      activeProvince,
+      activeCity,
+      activeCounty,
+      regionInfo,
+    });
+    if (lastExportUrl) URL.revokeObjectURL(lastExportUrl);
+    lastExportUrl = url;
+    exportModalTitle.textContent = `${originalLabel} · ${regionInfo.title}`;
+    exportImg.src = url;
+    exportDownload.href = url;
+    exportDownload.download = filename;
+    exportModal.hidden = false;
+  } finally {
+    saveBtn.disabled = false;
+    syncSaveBtnLabel();
+    syncDetail();
+  }
+});
+
 // ---------- 三沙卡片 ----------
 const placeSanshaCard = () => {
   if (sanshaCard.hidden) return;
@@ -1019,7 +1082,8 @@ attachGestures(svg, {
 // ---------- 全局事件 ----------
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if (locator.isOpen()) locator.close();
+  if (!exportModal.hidden) closeExportModal();
+  else if (locator.isOpen()) locator.close();
   else if (layerUI.isOpen()) layerUI.close();
   else if (selectedTown) applySelectedTown(null);
   else if (activeProvince) goUp();
