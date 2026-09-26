@@ -45,8 +45,8 @@ const renderSvgGeometryToImage = (liveSvg, box, width, height, scale, hideInset)
   clone.setAttribute('width', String(width));
   clone.setAttribute('height', String(height));
 
-  // 移除文字与引线节点（稍后在 Canvas 上使用 CityEx Sans 高清绘制）
-  for (const q of ['.prov-labels', '.city-labels', '.labels', '.town-labels', '.hover-layer']) {
+  // 移除文字、引线与未使用的占位节点（文字稍后在 Canvas 上使用 CityEx Sans 高清绘制）
+  for (const q of ['.prov-labels', '.city-labels', '.labels', '.town-labels', '.hover-layer', '.line-county']) {
     clone.querySelector(q)?.remove();
   }
   if (hideInset) {
@@ -91,6 +91,13 @@ const renderSvgGeometryToImage = (liveSvg, box, width, height, scale, hideInset)
   } finally {
     if (prevBasemap !== undefined) root.dataset.basemap = prevBasemap;
     if (prevDark !== undefined) root.dataset.basemapDark = prevDark;
+  }
+
+  // 兜底：确保任何非 defs 内的 path 都有显式 fill 属性，避免 SVG 默认黑色填充
+  for (const p of clone.querySelectorAll('path')) {
+    if (!p.closest('defs') && !p.hasAttribute('fill')) {
+      p.setAttribute('fill', 'none');
+    }
   }
 
   // 补充硬投影偏移（屏幕像素 3px, 5px 换算为 viewBox 单位）
@@ -339,20 +346,27 @@ export const generateMapPoster = async ({
   ctx.strokeStyle = '#222222';
   ctx.stroke();
 
-  // 5. 底部信息与品牌角标
+  // 5. 底部信息与 GitHub 仓库地址角标
   const footY = headerH + mapH + 20;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#6b665c';
   ctx.font = `13px ${FONT}`;
   const footText = regionInfo.foot || '中国省 · 市 · 区县 · 乡镇/街道 四级行政区划交互地图';
-  const maxFoot = footText.length > 56 ? footText.slice(0, 56) + '…' : footText;
+  const maxFoot = footText.length > 40 ? footText.slice(0, 40) + '…' : footText;
   ctx.fillText(maxFoot, pad + 4, footY + 14);
 
+  const repoText = 'https://github.com/ixxxxoooo/yutuzhi';
+  const brandText = 'YuTuZhi 舆图志  ·  ';
   ctx.textAlign = 'right';
+  ctx.font = `13px ui-monospace, SFMono-Regular, Menlo, ${FONT}`;
+  ctx.fillStyle = '#4b473f';
+  ctx.fillText(repoText, W - pad - 4, footY + 14);
+  const repoW = ctx.measureText(repoText).width;
+
+  ctx.font = `bold 14px ${FONT}`;
   ctx.fillStyle = '#222222';
-  ctx.font = `bold 15px ${FONT}`;
-  ctx.fillText('YuTuZhi · 舆图志', W - pad - 4, footY + 14);
+  ctx.fillText(brandText, W - pad - 4 - repoW, footY + 14);
 
   return new Promise(resolve => {
     canvas.toBlob(blob => {
