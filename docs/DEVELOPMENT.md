@@ -17,13 +17,10 @@ npm run check   # 自检：34省、370地级、2875县级、38717乡镇数据完
 | `npm run map` | 生成 `src/map-data.json` 与 `src/map-fine.json` |
 | `npm run font` | 生成字体子集 `src/fonts/cityex-sans.woff2`（`dev`/`build` 会自动执行） |
 
-`dist/` 是纯静态文件，使用相对路径（`base: './'`），可以直接部署在 Vercel、GitHub Pages、Cloudflare Pages 或任意静态服务器上。
+## 数据处理与渲染架构
 
-## 部署到 Vercel
-
-1. 将仓库推送到 GitHub（`https://github.com/ixxxxoooo/yutuzhi`）。
-2. 在 [Vercel](https://vercel.com/) 中点击 **Add New → Project**，导入该 GitHub 仓库。构建配置已写在 `vercel.json` 中（`npm ci` → `npm run build` → `dist/`），无需手动填写。
-3. 如需绑定自定义域名并在中国大陆获得更佳访问速度，可在 Vercel 项目的 **Settings → Domains** 添加自定义域名，并将 DNS CNAME 指向 `cname-china.vercel-dns.com`。
-4. 之后每次推送到 `main` 分支都会触发自动构建与发布。
-
-> **字体子集说明**：CI / Vercel 构建环境里没有 `data/raw/`（未纳入版本管理），因此构建时会自动沿用已提交的 `src/fonts/cityex-sans.woff2` 并校验常用字符覆盖率。
+- **四级行政区划**：覆盖 34 个省级行政区、370 个地级节点（333 个地级行政区 + 30 个省直辖县级单位 + 京津沪渝港澳台）、2,875 个县级行政区与 38,717 个乡镇/街道。
+- **拓扑修复与双级精度**：使用 `mapshaper` 对原始边界执行 `snap` 与 `-clean` 修复缝隙与重叠；全国视图默认加载粗精度轮廓（`src/map-data.json`），进入省/市/县视图或开启真实底图时无缝切换为高精度轮廓（`src/map-fine.json`）。
+- **四级乡镇真实坐标剖分**：基于国家统计局四级行政区划代码与民政部/高德真实乡镇驻地坐标（GCJ-02），在 Albers 等积圆锥投影下对区县精细多边形执行半平面裁剪 Voronoi 剖分，确保每个乡镇/街道坐落在真实地理方位。
+- **拓扑邻接着色与外轮廓提取**：通过共享边界顶点构建拓扑邻接图，为同级相邻区域分配互不冲突的六色舆图色板；同时在运行时消去内部公共边，实时提取省/市/区县最外圈完整边界用于立体外框与悬停焦点环绘制。
+- **字体子集化**：界面使用[得意黑 Smiley Sans](https://github.com/atelier-anchor/smiley-sans)（SIL OFL 1.1），按协议子集化后重命名为 **CityEx Sans**，输出至 `src/fonts/cityex-sans.woff2`。
