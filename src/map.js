@@ -1,12 +1,19 @@
 // SVG 地图：构建 DOM（省/市/区县/乡镇四级）、外边缘高亮提取、乡镇真实坐标分区、viewBox 缩放动画
 // @author ygw
 import data from './map-data.json';
-import { lonLatToSvg, svgToLonLat } from './basemap.js';
-import { parsePathRings, ptInRings, clipRingHalfPlane, ringCentroidAndArea, ringsToD, ringsBBox, outerBoundaryD } from './geometry.js';
+import { outerBoundaryD } from './geometry.js';
 import { TONE_COUNT, extractPathVerts, assignTones } from './topo-color.js';
+import { SET_DETAIL_BATCH } from './constants.js';
+import { computeTownCells } from './voronoi-core.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const INSET_RADIUS = 6; // 南海插图卡片圆角（viewBox 单位，全国视图下约 5～8px）
+
+// 粗精度路径独立 chunk，与元数据并行下载后合并到 units
+const pathData = (await import('./map-paths-coarse.json')).default;
+for (const u of data.units) {
+  if (pathData[u.code]) u.d = pathData[u.code];
+}
 
 export const units = data.units;
 export const cities = data.cities;
@@ -40,11 +47,53 @@ let finePromise = null;
 export const loadFine = () => finePromise ??= import('./map-fine.json').then(m => (fine = m.default));
 export const hasFine = () => fine !== null;
 
+/** 已加载的乡镇数据（按区县码合并） */
 let rawTowns = null;
-let townsPromise = null;
-export const loadTowns = () => townsPromise ??= import('./towns-data.json').then(m => (rawTowns = m.default));
+/** 省级分片加载 Promise：prefix -> Promise */
+const townsProvPromises = new Map();
+/** 搜索索引（轻量，按需加载） */
+let townsIndex = null;
+let townsIndexPromise = null;
+
+/**
+ * 按省级前缀加载乡镇分片并合并到 rawTowns
+ * @param {string} provinceOrUnitCode - 6 位省/市/区县代码
+ * @returns {Promise<object>} 该省分片数据
+ */
+export const loadTownsForProvince = provinceOrUnitCode => {
+  const prefix = String(provinceOrUnitCode).slice(0, 2);
+  if (townsProvPromises.has(prefix)) return townsProvPromises.get(prefix);
+  const p = import(`./towns/${prefix}.json`).then(m => {
+    const shard = m.default;
+    rawTowns = rawTowns ? { ...rawTowns, ...shard } : { ...shard };
+    return shard;
+  });
+  townsProvPromises.set(prefix, p);
+  return p;
+};
+
+/**
+ * 兼容旧接口：加载全部省级分片（仅搜索全量乡镇时使用）
+ * @returns {Promise<object>}
+ */
+export const loadTowns = async () => {
+  const prefixes = [...new Set(provinces.map(p => p.code.slice(0, 2)))];
+  await Promise.all(prefixes.map(loadTownsForProvince));
+  return rawTowns;
+};
+
+/**
+ * 加载乡镇搜索索引（无坐标，按需）
+ * @returns {Promise<Array>}
+ */
+export const loadTownsIndex = () => townsIndexPromise ??= import('./towns-index.json').then(m => {
+  townsIndex = m.default;
+  return townsIndex;
+});
+
 export const hasTowns = () => rawTowns !== null;
 export const getRawTowns = () => rawTowns;
+export const getTownsIndex = () => townsIndex;
 
 // 某区县当前可用的最精细轮廓（地图坐标）
 export const unitPath = code => fine?.units[code] ?? coarse.units[code];
@@ -53,8 +102,19 @@ export const cityPath = code => unitsOfCity(code).map(u => unitPath(u.code)).fil
 
 // ---------- 四级乡镇/街道真实坐标辖区剖分 ----------
 
+const COUNTY_TOWNS_CACHE_MAX = 80;
 const countyTownsCache = new Map(); // unitCode -> { detail, list }
 const townByCode = new Map();
+let countySubDCache = null; // { code, detail, d } 区县内乡镇分界线拼接缓存
+
+const touchCountyCache = (unitCode, entry) => {
+  if (countyTownsCache.has(unitCode)) countyTownsCache.delete(unitCode);
+  countyTownsCache.set(unitCode, entry);
+  while (countyTownsCache.size > COUNTY_TOWNS_CACHE_MAX) {
+    const oldest = countyTownsCache.keys().next().value;
+    countyTownsCache.delete(oldest);
+  }
+};
 
 export const getTownByCode = code => {
   if (townByCode.has(code)) return townByCode.get(code);
@@ -66,6 +126,58 @@ export const getTownByCode = code => {
   return null;
 };
 
+/** 乡镇数超过该阈值时走 Web Worker，避免主线程尖峰 */
+const VORONOI_WORKER_THRESHOLD = 12;
+let voronoiWorker = null;
+let voronoiReqId = 0;
+const voronoiPending = new Map();
+
+/**
+ * 获取（懒创建）Voronoi Worker
+ * @returns {Worker|null}
+ */
+const getVoronoiWorker = () => {
+  if (typeof Worker === 'undefined') return null;
+  if (voronoiWorker) return voronoiWorker;
+  try {
+    voronoiWorker = new Worker(new URL('./voronoi.worker.js', import.meta.url), { type: 'module' });
+    voronoiWorker.onmessage = e => {
+      const { id, ok, list, error } = e.data || {};
+      const pending = voronoiPending.get(id);
+      if (!pending) return;
+      voronoiPending.delete(id);
+      if (ok) pending.resolve(list);
+      else pending.reject(new Error(error || 'voronoi worker failed'));
+    };
+    voronoiWorker.onerror = () => {
+      for (const [, p] of voronoiPending) p.reject(new Error('voronoi worker error'));
+      voronoiPending.clear();
+      voronoiWorker = null;
+    };
+  } catch {
+    voronoiWorker = null;
+  }
+  return voronoiWorker;
+};
+
+/**
+ * 将计算结果写入缓存与 townByCode
+ * @param {string} unitCode
+ * @param {Array} list
+ * @returns {Array}
+ */
+const storeTownList = (unitCode, list) => {
+  for (const t of list) townByCode.set(t.code, t);
+  touchCountyCache(unitCode, { detail: fine ? 'fine' : 'coarse', list });
+  countySubDCache = null;
+  return list;
+};
+
+/**
+ * 同步计算乡镇 Voronoi（缓存命中或 Worker 不可用时）
+ * @param {string} unitCode
+ * @returns {Array}
+ */
 export const townsOfUnit = unitCode => {
   const cached = countyTownsCache.get(unitCode);
   if (cached && cached.detail === (fine ? 'fine' : 'coarse')) return cached.list;
@@ -73,134 +185,44 @@ export const townsOfUnit = unitCode => {
   if (!u || !rawTowns) return [];
   const entries = rawTowns[unitCode] ?? [];
   if (!entries.length) return [];
-
-  const d = unitPath(unitCode);
-  const rings = parsePathRings(d);
-  const N = entries.length;
-
-  if (!rings.length) {
-    const list = entries.map(([code, name, short, py, pi, tLon, tLat]) => {
-      const t = {
-        code, name, short, py, pi,
-        unit: u.code, city: u.city, province: u.province,
-        d: '', label: null, bbox: u.bbox,
-        area: Math.max(1, Math.round((u.area || N) / N)),
-        center: tLon && tLat ? [Math.round(tLon * 100) / 100, Math.round(tLat * 100) / 100] : u.center,
-      };
-      townByCode.set(code, t);
-      return t;
-    });
-    countyTownsCache.set(unitCode, { detail: fine ? 'fine' : 'coarse', list });
-    return list;
-  }
-
-  const mainRing = rings.reduce((a, b) => (ringCentroidAndArea(b).area > ringCentroidAndArea(a).area ? b : a));
-  const { cx: cx0, cy: cy0, area: mainArea } = ringCentroidAndArea(mainRing);
-  const rEst = Math.sqrt(mainArea / Math.PI);
-
-  // 使用国家地名信息库 / 高德地图真实乡镇驻地经纬度 (tLon, tLat) 投影至 Albers 平面坐标作为分区中心
-  const seeds = entries.map(([, , , , , tLon, tLat], i) => {
-    if (typeof tLon === 'number' && typeof tLat === 'number') {
-      let [sx, sy] = lonLatToSvg(tLon, tLat);
-      if (!ptInRings(sx, sy, rings)) {
-        // 若驻地坐标因边界简化略微落在多边形外，向最近边界顶点与质心微调拉回多边形内
-        let bestX = cx0, bestY = cy0, bestD2 = Infinity;
-        for (const r of rings) {
-          for (const [vx, vy] of r) {
-            const d2 = (vx - sx) ** 2 + (vy - sy) ** 2;
-            if (d2 < bestD2) { bestD2 = d2; bestX = vx; bestY = vy; }
-          }
-        }
-        sx = bestX * 0.85 + cx0 * 0.15;
-        sy = bestY * 0.85 + cy0 * 0.15;
-      }
-      return [sx, sy];
-    }
-    const rad = rEst * 0.62 * Math.sqrt((i + 0.45) / N);
-    const ang = i * 2.399963229728653;
-    return [cx0 + Math.cos(ang) * rad, cy0 + Math.sin(ang) * rad];
+  const list = computeTownCells({
+    pathD: unitPath(unitCode),
+    entries,
+    meta: { code: u.code, city: u.city, province: u.province, area: u.area, bbox: u.bbox, center: u.center },
   });
+  return storeTownList(unitCode, list);
+};
 
-  // 防止同址街道坐标完全重合导致法向量为零
-  for (let i = 0; i < N; i++) {
-    for (let j = i + 1; j < N; j++) {
-      const dx = seeds[j][0] - seeds[i][0], dy = seeds[j][1] - seeds[i][1];
-      if (dx * dx + dy * dy < 1e-6) {
-        const ang = (j - i) * 1.1;
-        seeds[j][0] += Math.cos(ang) * 0.015;
-        seeds[j][1] += Math.sin(ang) * 0.015;
-      }
+/**
+ * 异步预计算乡镇分区：大区县走 Web Worker，小区县同步完成
+ * @param {string} unitCode
+ * @returns {Promise<Array>}
+ */
+export const ensureTownsOfUnit = async unitCode => {
+  const cached = countyTownsCache.get(unitCode);
+  if (cached && cached.detail === (fine ? 'fine' : 'coarse')) return cached.list;
+  const u = unitByCode.get(unitCode);
+  if (!u || !rawTowns) return [];
+  const entries = rawTowns[unitCode] ?? [];
+  if (!entries.length) return [];
+
+  const meta = { code: u.code, city: u.city, province: u.province, area: u.area, bbox: u.bbox, center: u.center };
+  const pathD = unitPath(unitCode);
+  const worker = entries.length >= VORONOI_WORKER_THRESHOLD ? getVoronoiWorker() : null;
+
+  if (worker) {
+    const id = ++voronoiReqId;
+    try {
+      const list = await new Promise((resolve, reject) => {
+        voronoiPending.set(id, { resolve, reject });
+        worker.postMessage({ id, pathD, entries, meta });
+      });
+      return storeTownList(unitCode, list);
+    } catch {
+      // Worker 失败时回退主线程
     }
   }
-
-  const computeCells = curSeeds => curSeeds.map(([sx, sy], i) => {
-    let cellRings = rings.map(r => r.slice());
-    for (let j = 0; j < N; j++) {
-      if (i === j) continue;
-      const [ox, oy] = curSeeds[j];
-      const mx = (sx + ox) / 2, my = (sy + oy) / 2;
-      const nx = ox - sx, ny = oy - sy;
-      cellRings = cellRings.map(r => clipRingHalfPlane(r, mx, my, nx, ny)).filter(r => r.length >= 3);
-    }
-    return cellRings;
-  });
-
-  // 仅做 1 次轻量级 (22%) 质心舒缓：既严格保持真实东西南北地理方位，又让主城区密集街道拥有适度舒展的可点击面积
-  let cells = computeCells(seeds);
-  if (N > 1) {
-    const relaxedSeeds = cells.map((cellRings, i) => {
-      let totA = 0, sumX = 0, sumY = 0;
-      for (const r of cellRings) {
-        const { area, cx, cy } = ringCentroidAndArea(r);
-        totA += area; sumX += cx * area; sumY += cy * area;
-      }
-      if (totA <= 0) return [seeds[i][0] * 0.7 + cx0 * 0.3, seeds[i][1] * 0.7 + cy0 * 0.3];
-      const cx = sumX / totA, cy = sumY / totA;
-      return [seeds[i][0] * 0.78 + cx * 0.22, seeds[i][1] * 0.78 + cy * 0.22];
-    });
-    cells = computeCells(relaxedSeeds);
-  }
-
-  const cellStats = cells.map((cellRings, i) => {
-    let totA = 0, sumX = 0, sumY = 0;
-    for (const r of cellRings) {
-      const { area, cx, cy } = ringCentroidAndArea(r);
-      totA += area; sumX += cx * area; sumY += cy * area;
-    }
-    const lx = totA > 0 ? sumX / totA : seeds[i][0];
-    const ly = totA > 0 ? sumY / totA : seeds[i][1];
-    return { svgArea: totA, label: [Math.round(lx * 100) / 100, Math.round(ly * 100) / 100] };
-  });
-  const totalSvgArea = cellStats.reduce((s, c) => s + c.svgArea, 0) || 1;
-
-  const list = entries.map(([code, name, short, py, pi, tLon, tLat], i) => {
-    const cellRings = cells[i];
-    const { svgArea, label } = cellStats[i];
-    const areaKm2 = Math.max(1, Math.round(((u.area || N * 15) * svgArea) / totalSvgArea));
-    const [lon, lat] = (typeof tLon === 'number' && typeof tLat === 'number')
-      ? [tLon, tLat]
-      : svgToLonLat(label[0], label[1]);
-    const t = {
-      code,
-      name,
-      short,
-      py,
-      pi,
-      unit: u.code,
-      city: u.city,
-      province: u.province,
-      d: ringsToD(cellRings),
-      label,
-      bbox: cellRings.length ? ringsBBox(cellRings) : u.bbox,
-      area: areaKm2,
-      center: [Math.round(lon * 100) / 100, Math.round(lat * 100) / 100],
-    };
-    townByCode.set(code, t);
-    return t;
-  });
-
-  countyTownsCache.set(unitCode, { detail: fine ? 'fine' : 'coarse', list });
-  return list;
+  return townsOfUnit(unitCode);
 };
 
 export const townPath = code => getTownByCode(code)?.d ?? '';
@@ -262,6 +284,36 @@ let currentHover = null;   // { type: 'province' | 'city' | 'unit' | 'town', cod
 let currentSelect = null;  // { type: 'unit' | 'town', code }
 let currentActive = { viewMode: 'country', provinceCode: null, cityCode: null, countyCode: null };
 
+/** 高亮层 DOM 引用缓存，避免每次 sync 全树 querySelector */
+let highlightRefs = null;
+
+/**
+ * 绑定当前 SVG 的高亮层节点引用（buildMap 后调用）
+ * @param {SVGSVGElement} svg
+ */
+const bindHighlightRefs = svg => {
+  const subLayer = svg.querySelector(':scope > .active-sublines');
+  const activeLayer = svg.querySelector(':scope > .active-layer');
+  const hoverLayer = svg.querySelector(':scope > .hover-layer');
+  const selLayer = svg.querySelector(':scope > .select-layer');
+  highlightRefs = {
+    svg,
+    subLayer,
+    subCasing: subLayer?.querySelector('.subline-casing'),
+    subStroke: subLayer?.querySelector('.subline-stroke'),
+    parentOutline: svg.querySelector(':scope > .active-parent-layer > .active-parent-outline'),
+    activeShadow: activeLayer?.querySelector('.active-shadow'),
+    activeHalo: activeLayer?.querySelector('.active-halo'),
+    activeOutline: activeLayer?.querySelector('.active-outline'),
+    hoverLayer,
+    hoverGlow: hoverLayer?.querySelector('.hover-glow'),
+    hoverHalo: hoverLayer?.querySelector('.hover-halo'),
+    hoverOutline: hoverLayer?.querySelector('.hover-outline'),
+    selHalo: selLayer?.querySelector('.select-halo'),
+    selOutline: selLayer?.querySelector('.select-outline'),
+  };
+};
+
 const getActiveSublinesD = (detail) => {
   const { viewMode, provinceCode, cityCode, countyCode } = currentActive;
   if (viewMode === 'province' && provinceCode) {
@@ -277,10 +329,13 @@ const getActiveSublinesD = (detail) => {
       .join('');
   }
   if (viewMode === 'county' && countyCode) {
-    return townsOfUnit(countyCode)
-      .map(t => t.d)
-      .filter(Boolean)
-      .join('');
+    const detailKey = fine ? 'fine' : 'coarse';
+    if (countySubDCache?.code === countyCode && countySubDCache?.detail === detailKey) {
+      return countySubDCache.d;
+    }
+    const d = townsOfUnit(countyCode).map(t => t.d).filter(Boolean).join('');
+    countySubDCache = { code: countyCode, detail: detailKey, d };
+    return d;
   }
   return '';
 };
@@ -316,48 +371,29 @@ const getActiveOutlinesD = (detail) => {
 };
 
 const syncHighlightLayer = svg => {
+  if (!highlightRefs || highlightRefs.svg !== svg) bindHighlightRefs(svg);
+  const refs = highlightRefs;
   const detail = svg.dataset.detail || 'coarse';
 
-  // 1. 当前进入板块的内部子区域高对比分界线 + 板块整体外框
-  const subLayer = svg.querySelector(':scope > .active-sublines');
-  if (subLayer) {
-    const subD = getActiveSublinesD(detail);
-    subLayer.querySelector('.subline-casing')?.setAttribute('d', subD);
-    subLayer.querySelector('.subline-stroke')?.setAttribute('d', subD);
-  }
+  const subD = getActiveSublinesD(detail);
+  refs.subCasing?.setAttribute('d', subD);
+  refs.subStroke?.setAttribute('d', subD);
 
   const { activeD, parentD } = getActiveOutlinesD(detail);
-  svg.querySelector(':scope > .active-parent-layer > .active-parent-outline')?.setAttribute('d', parentD);
+  refs.parentOutline?.setAttribute('d', parentD);
+  refs.activeShadow?.setAttribute('d', activeD);
+  refs.activeHalo?.setAttribute('d', activeD);
+  refs.activeOutline?.setAttribute('d', activeD);
 
-  const activeLayer = svg.querySelector(':scope > .active-layer');
-  if (activeLayer) {
-    activeLayer.querySelector('.active-shadow')?.setAttribute('d', activeD);
-    activeLayer.querySelector('.active-halo')?.setAttribute('d', activeD);
-    activeLayer.querySelector('.active-outline')?.setAttribute('d', activeD);
-  }
+  const hoverD = currentHover ? getOutline(currentHover.type, currentHover.code, detail) : '';
+  refs.hoverGlow?.setAttribute('d', hoverD);
+  refs.hoverHalo?.setAttribute('d', hoverD);
+  refs.hoverOutline?.setAttribute('d', hoverD);
+  if (refs.hoverLayer) refs.hoverLayer.dataset.neighbor = currentHover?.isNeighbor ? '1' : '';
 
-  // 2. 鼠标悬停焦点外框（最高视觉层级）
-  const hoverLayer = svg.querySelector(':scope > .hover-layer');
-  const hoverGlow = hoverLayer?.querySelector('.hover-glow');
-  const hoverHalo = hoverLayer?.querySelector('.hover-halo');
-  const hoverOutline = hoverLayer?.querySelector('.hover-outline');
-  if (hoverHalo && hoverOutline) {
-    const d = currentHover ? getOutline(currentHover.type, currentHover.code, detail) : '';
-    hoverGlow?.setAttribute('d', d);
-    hoverHalo.setAttribute('d', d);
-    hoverOutline.setAttribute('d', d);
-    hoverLayer.dataset.neighbor = currentHover?.isNeighbor ? '1' : '';
-  }
-
-  // 3. 选中固定外框
-  const selLayer = svg.querySelector(':scope > .select-layer');
-  const selHalo = selLayer?.querySelector('.select-halo');
-  const selOutline = selLayer?.querySelector('.select-outline');
-  if (selHalo && selOutline) {
-    const d = currentSelect ? getOutline(currentSelect.type, currentSelect.code, detail) : '';
-    selHalo.setAttribute('d', d);
-    selOutline.setAttribute('d', d);
-  }
+  const selD = currentSelect ? getOutline(currentSelect.type, currentSelect.code, detail) : '';
+  refs.selHalo?.setAttribute('d', selD);
+  refs.selOutline?.setAttribute('d', selD);
 };
 
 export const setActiveRegion = (svg, state) => {
@@ -422,9 +458,11 @@ export const renderCountyTowns = (svg, unitCode) => {
     clipPathEl.setAttribute('d', '');
     countyLineEl?.setAttribute('d', '');
     delete svg.dataset.activeUnit;
+    countySubDCache = null;
     return [];
   }
   svg.dataset.activeUnit = unitCode;
+  countySubDCache = null;
   const uPath = unitPath(unitCode) || '';
   clipPathEl.setAttribute('d', uPath);
   countyLineEl?.setAttribute('d', uPath);
@@ -445,21 +483,42 @@ export const renderCountyTowns = (svg, unitCode) => {
   return list;
 };
 
-// 切换主图（不含插图）区县轮廓与边界线的精度
+// 切换主图（不含插图）区县轮廓与边界线的精度（分帧批量更新，避免主线程尖峰）
+let detailBatchRaf = 0;
 export const setDetail = (svg, level) => {
   const src = level === 'fine' ? fine : coarse;
   if (!src) return false;
   if (svg.dataset.detail === level) return true;
   svg.dataset.detail = level;
-  for (const p of svg.querySelectorAll('.prov .unit')) p.setAttribute('d', src.units[p.dataset.code]);
-  svg.querySelector(':scope > .line-city').setAttribute('d', src.lines.city ?? '');
-  svg.querySelector(':scope > .line-province').setAttribute('d', src.lines.province);
-  svg.querySelector(':scope > .line-country').setAttribute('d', src.lines.country);
-  svg.querySelector(':scope > .map-shadow').setAttribute('d', src.outline);
-  if (svg.dataset.activeUnit) {
-    renderCountyTowns(svg, svg.dataset.activeUnit);
-  }
-  syncHighlightLayer(svg);
+  if (detailBatchRaf) cancelAnimationFrame(detailBatchRaf);
+
+  const paths = [...svg.querySelectorAll('.prov .unit')];
+  let i = 0;
+  const applyLines = () => {
+    svg.querySelector(':scope > .line-city')?.setAttribute('d', src.lines.city ?? '');
+    svg.querySelector(':scope > .line-province')?.setAttribute('d', src.lines.province);
+    svg.querySelector(':scope > .line-country')?.setAttribute('d', src.lines.country);
+    svg.querySelector(':scope > .map-shadow')?.setAttribute('d', src.outline);
+  };
+  const step = () => {
+    const end = Math.min(i + SET_DETAIL_BATCH, paths.length);
+    for (; i < end; i++) {
+      const p = paths[i];
+      const d = src.units[p.dataset.code];
+      if (d) p.setAttribute('d', d);
+    }
+    if (i < paths.length) {
+      detailBatchRaf = requestAnimationFrame(step);
+    } else {
+      detailBatchRaf = 0;
+      applyLines();
+      if (svg.dataset.activeUnit) renderCountyTowns(svg, svg.dataset.activeUnit);
+      syncHighlightLayer(svg);
+    }
+  };
+  // 边界线先更新，区县 path 分帧
+  applyLines();
+  detailBatchRaf = requestAnimationFrame(step);
   return true;
 };
 
@@ -538,6 +597,9 @@ export const buildMap = (svg, { withLabels = true } = {}) => {
       class: 'prov',
       'data-province': p.code,
       'data-tone': String(tone),
+      role: 'button',
+      tabindex: '0',
+      'aria-label': p.name,
     }, provLayer));
   }
   const cityGroups = new Map();
@@ -627,6 +689,7 @@ export const buildMap = (svg, { withLabels = true } = {}) => {
   el('rect', { class: 'inset-frame', ...box }, inset);
   el('text', { class: 'inset-title', x: bx + bw - 7, y: by + bh - 7 }, inset).textContent = '南海诸岛';
 
+  bindHighlightRefs(svg);
   return svg;
 };
 
@@ -681,13 +744,31 @@ export const fitView = (svg, box, { top = 0, right = 0, bottom = 0, left = 0 } =
 
 const ease = t => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 let animation = 0;
+/** 当前动画 Promise 的 resolve，新动画启动时先结束旧 Promise，避免 await 挂起 */
+let animationResolve = null;
 
-export const stopAnimation = () => cancelAnimationFrame(animation);
+export const stopAnimation = () => {
+  cancelAnimationFrame(animation);
+  if (animationResolve) {
+    const done = animationResolve;
+    animationResolve = null;
+    done();
+  }
+};
 
 export const currentView = svg => svg.getAttribute('viewBox').split(' ').map(Number);
 
+/**
+ * 平滑切换 viewBox；若已有动画进行中，立即结束旧 Promise 再启动新动画
+ * @param {SVGSVGElement} svg
+ * @param {number[]} to - 目标 viewBox [x, y, w, h]
+ * @param {number} duration - 动画时长（毫秒）
+ * @param {function|null} onFrame - 每帧回调
+ * @returns {Promise<void>}
+ */
 export const animateView = (svg, to, duration = 650, onFrame = null) => new Promise(resolve => {
-  cancelAnimationFrame(animation);
+  stopAnimation();
+  animationResolve = resolve;
   const from = currentView(svg);
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) duration = 0;
   const start = performance.now();
@@ -697,11 +778,18 @@ export const animateView = (svg, to, duration = 650, onFrame = null) => new Prom
     const view = from.map((v, i) => v + (to[i] - v) * k);
     svg.setAttribute('viewBox', view.join(' '));
     onFrame?.(view);
-    if (t < 1) animation = requestAnimationFrame(step);
-    else resolve();
+    if (t < 1) {
+      animation = requestAnimationFrame(step);
+    } else {
+      animationResolve = null;
+      resolve();
+    }
   };
   animation = requestAnimationFrame(step);
 });
+
+/** 清除 SVG getBoundingClientRect 缓存（侧栏折叠等不触发 window.resize 时调用） */
+export const clearRectCache = () => { rectCache = null; };
 
 export const unitsPerPixel = (svg, view = currentView(svg)) => {
   const { width, height } = rectOf(svg);

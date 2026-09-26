@@ -10,7 +10,7 @@
   --bg: #f3efe6;           /* 页面与海面 */
   --land: #ffffff;         /* 默认陆地底色 */
   --ink: #222222;          /* 文字、粗边框、国界 */
-  --muted: #6b665c;        /* 次要文字 */
+  --muted: #5a5549;        /* 次要文字（提高对比度以满足 WCAG AA） */
   --panel: rgba(255, 255, 255, .94);
   --paper: #fbf9f4;        /* 南海插图卡片底色 */
   --soft: #f6f3ec;         /* 浅底色块 */
@@ -71,6 +71,16 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 [hidden] { display: none !important; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .noscript { margin: 40vh 16px 0; text-align: center; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.skip-link {
+  position: absolute; left: 8px; top: -48px; z-index: 100;
+  padding: 8px 14px; background: var(--ink); color: #fff; border-radius: 6px;
+  text-decoration: none; font-weight: bold;
+}
+.skip-link:focus { top: 8px; }
 
 /* ============ 通用按钮 ============ */
 .btn {
@@ -368,6 +378,14 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 /* ============ 地图四级视觉层级与悬停高亮 ============ */
 #map path { vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+/* SVG 内部元素获得焦点时，浏览器默认以 bounding-box 矩形渲染 outline，
+   会出现不美观的蓝色方框。焦点指示改由自定义高亮层（active-outline / hover-outline）承担。
+   覆盖所有焦点伪类，包括 Chrome/WebKit 的 -webkit-focus-ring-color */
+#map, #map *,
+#stage, #stage * {
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
 .sea { fill: var(--bg); }
 
 /* 默认陆地与分界线 */
@@ -808,10 +826,14 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 @media (pointer: coarse) {
   .search input { font-size: 16px; }
-  #city-list button { padding: 5px 10px; }
-  .loc-grid button { padding: 7px 10px; }
-  .loc-head button { padding: 6px 10px; }
-  .loc-list button { padding: 10px 12px; }
+  #topbar .btn, .search { min-height: 44px; }
+  #topbar .icon-btn { min-width: 44px; min-height: 44px; }
+  #city-list button { padding: 8px 12px; min-height: 44px; }
+  .loc-grid button { padding: 10px 12px; min-height: 44px; }
+  .loc-head button { padding: 8px 12px; min-height: 44px; }
+  .loc-list button { padding: 12px 14px; min-height: 44px; }
+  #sansha-card .name { padding: 8px 10px; min-height: 44px; }
+  .panel-handle { height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

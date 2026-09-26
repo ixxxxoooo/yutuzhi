@@ -1,4 +1,4 @@
-# CI 流水线：构建检查与数据完整性验证
+# CI 流水线：lint、测试、数据检查与生产构建
 # @author ygw
 name: CI
 
@@ -21,6 +21,12 @@ jobs:
 
       - run: npm ci
 
+      - name: ESLint
+        run: npm run lint
+
+      - name: 单元测试
+        run: npm test
+
       - name: 数据完整性检查
         run: npm run check
 
@@ -31,5 +37,20 @@ jobs:
         run: |
           echo "## 构建产物体积" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          du -sh dist/assets/* | sort -rh >> $GITHUB_STEP_SUMMARY
+          du -sh dist/assets/* 2>/dev/null | sort -rh >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          MAIN_JS=$(find dist/assets -name 'index-*.js' ! -name '*map*' ! -name '*towns*' | head -1)
+          if [ -n "$MAIN_JS" ]; then
+            SIZE=$(wc -c < "$MAIN_JS")
+            echo "主包原始大小: $SIZE bytes" >> $GITHUB_STEP_SUMMARY
+            if [ "$SIZE" -gt 1500000 ]; then
+              echo "::warning::主包超过 1.5MB，请关注首屏体积"
+            fi
+          fi
+
+      - name: Lighthouse 可访问性抽检
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          configPath: ./.lighthouserc.json
+          uploadArtifacts: true
+          temporaryPublicStorage: true

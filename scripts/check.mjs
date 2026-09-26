@@ -10,6 +10,7 @@ const ROOT = new URL('../', import.meta.url);
 const read = async p => readFile(new URL(p, ROOT), 'utf8');
 const data = JSON.parse(await read('src/map-data.json'));
 const fine = JSON.parse(await read('src/map-fine.json'));
+const coarsePaths = JSON.parse(await read('src/map-paths-coarse.json'));
 
 const problems = [];
 const check = (ok, msg) => { if (!ok) problems.push(msg); };
@@ -24,7 +25,8 @@ for (const u of data.units) {
   check(u.short && u.name, `${u.code} 缺少名称`);
   check(data.provinces.some(p => p.code === u.province), `${u.name} 的省份 ${u.province} 不存在`);
   if (isSansha(u.code)) continue;
-  check(u.d, `${u.name} 缺少粗略轮廓`);
+  const pathD = u.d || coarsePaths[u.code];
+  check(pathD, `${u.name} 缺少粗略轮廓`);
   check(fine.units[u.code], `${u.name} 缺少精细轮廓`);
   check(Array.isArray(u.label) && u.label.every(Number.isFinite), `${u.name} 缺少标签点`);
   check(u.bbox?.length === 4 && u.bbox[2] > u.bbox[0], `${u.name} 范围异常`);

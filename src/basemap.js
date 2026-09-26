@@ -37,7 +37,7 @@ export const svgToLonLat = (svgX, svgY) => {
 
 // WGS-84 -> GCJ-02（供 Esri 地形/晕渲等 WGS-84 瓦片与国内 GCJ-02 行政边界严丝合缝对齐）
 const A_ELLIPSE = 6378245.0;
-const EE = 0.00669342162296594323;
+const EE = Number('0.00669342162296594323');
 const outOfChina = (lon, lat) => lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271;
 const transformLat = (x, y) => {
   let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
@@ -360,21 +360,34 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
     if (rafId || state.basemap === 'paper') return;
     rafId = requestAnimationFrame(() => {
       rafId = 0;
+      render.force = true;
       if (lastView) render(lastView);
     });
   };
 
   const evictCache = () => {
-    if (cache.size <= MAX_CACHE) return;
-    const keys = [...cache.keys()];
-    const removeCount = cache.size - MAX_CACHE + 60;
-    for (let i = 0; i < removeCount; i++) {
-      const k = keys[i];
-      // 保留 z <= 5 的全国概览瓦片
-      if (/:[345]\//.test(k)) continue;
-      const t = cache.get(k);
-      if (t?.tex) glRenderer?.deleteTexture(t.tex);
-      cache.delete(k);
+    // 先淘汰非概览瓦片，仍超限则连 z3-5 一并淘汰，保证 size <= MAX_CACHE
+    while (cache.size > MAX_CACHE) {
+      let removed = 0;
+      for (const k of [...cache.keys()]) {
+        if (cache.size <= MAX_CACHE) break;
+        if (/:[345]\//.test(k)) continue;
+        const t = cache.get(k);
+        if (t?.abort) t.abort.abort();
+        if (t?.tex) glRenderer?.deleteTexture(t.tex);
+        cache.delete(k);
+        removed++;
+      }
+      if (removed === 0) {
+        for (const k of [...cache.keys()]) {
+          if (cache.size <= MAX_CACHE) break;
+          const t = cache.get(k);
+          if (t?.abort) t.abort.abort();
+          if (t?.tex) glRenderer?.deleteTexture(t.tex);
+          cache.delete(k);
+        }
+        break;
+      }
     }
   };
 
@@ -387,6 +400,7 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
       cache.set(key, tile);
       return tile;
     }
+    const abort = new AbortController();
     tile = {
       key,
       z,
@@ -395,6 +409,7 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
       ready: false,
       error: false,
       tex: null,
+      abort,
       verts: computeTileVerts(z, x, y, layer.crs),
     };
     cache.set(key, tile);
@@ -404,15 +419,23 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
     img.crossOrigin = 'anonymous';
     img.decoding = 'async';
     img.onload = () => {
-      if (!cache.has(key)) return;
+      if (!cache.has(key) || abort.signal.aborted) return;
       tile.ready = true;
-      if (glRenderer) tile.tex = glRenderer.uploadTexture(img);
+      if (glRenderer) {
+        if (tile.tex) glRenderer.deleteTexture(tile.tex);
+        tile.tex = glRenderer.uploadTexture(img);
+      }
       scheduleRender();
     };
     img.onerror = () => {
       tile.error = true;
     };
+    // 若已被淘汰则不再发起请求
+    if (abort.signal.aborted) return tile;
     img.src = layer.url(z, x, y);
+    abort.signal.addEventListener('abort', () => {
+      img.src = '';
+    });
     return tile;
   };
 
@@ -466,6 +489,11 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
     }
 
     const [vx, vy, vw, vh] = view;
+    // 视口与缩放未变时跳过重绘（瓦片 onload 会 scheduleRender 强制刷新）
+    const viewKey = `${vx.toFixed(2)},${vy.toFixed(2)},${vw.toFixed(2)},${vh.toFixed(2)},${W}x${H},${state.basemap},${state.roadOverlay}`;
+    if (render.lastKey === viewKey && !render.force) return;
+    render.lastKey = viewKey;
+    render.force = false;
     const s = Math.min(W / vw, H / vh);
     const ox = (W - vw * s) / 2 - vx * s;
     const oy = (H - vh * s) / 2 - vy * s;
@@ -513,6 +541,17 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
     if (!bm) return;
     const prev = state.basemap;
     state.basemap = id;
+    if (prev !== id) {
+      // 切换底图时清除旧图层纹理，避免多图层纹理共存占满 GPU
+      for (const [k, t] of [...cache.entries()]) {
+        if (k.startsWith(`${prev}:`)) {
+          if (t?.abort) t.abort.abort();
+          if (t?.tex) glRenderer?.deleteTexture(t.tex);
+          cache.delete(k);
+        }
+      }
+      render.lastKey = '';
+    }
     if (prev !== id && bm.defaultRoadOverlay !== undefined) {
       state.roadOverlay = !!bm.defaultRoadOverlay;
     } else if (id === 'street' || id === 'paper') {
@@ -586,14 +625,18 @@ export const createLayerUI = ({ button, menu, basemap }) => {
   const open = () => {
     if (!menu.hidden) return;
     menu.hidden = false;
+    menu.setAttribute('aria-modal', 'true');
     button.setAttribute('aria-expanded', 'true');
     syncUI();
+    menu.querySelector('button')?.focus();
   };
 
   const close = () => {
     if (menu.hidden) return;
     menu.hidden = true;
+    menu.removeAttribute('aria-modal');
     button.setAttribute('aria-expanded', 'false');
+    button.focus();
   };
 
   button.addEventListener('click', e => {

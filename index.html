@@ -4,13 +4,30 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>YuTuZhi 舆图志 · 中国行政区划地图</title>
-  <meta name="description" content="YuTuZhi（舆图志）：中国省、市、区县、乡镇四级行政区划交互地图，支持悬停快速查看区域总量、面积、坐标、区划代码与下辖行政区信息">
+  <meta name="description" content="YuTuZhi（舆图志）：中国省、市、区县、乡镇/街道四级行政区划交互地图，支持悬停快速查看区域总量、面积、坐标、区划代码与下辖行政区信息">
   <meta name="theme-color" content="#f3efe6">
+  <link rel="canonical" href="https://yutuzhi.vercel.app/">
+  <!-- Open Graph / Twitter Card -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="YuTuZhi 舆图志 · 中国行政区划地图">
+  <meta property="og:description" content="中国省、市、区县、乡镇/街道四级行政区划交互探索地图">
+  <meta property="og:image" content="/og.jpg">
+  <meta property="og:locale" content="zh_CN">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="YuTuZhi 舆图志 · 中国行政区划地图">
+  <meta name="twitter:description" content="中国省、市、区县、乡镇/街道四级行政区划交互探索地图">
+  <meta name="twitter:image" content="/og.jpg">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='4' width='26' height='24' rx='6' fill='%23FACC15' stroke='%23222' stroke-width='3'/%3E%3Cpath d='M9 20l5-8 4 5 3-4 3 7z' fill='%23fff' stroke='%23222' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <!-- 字体与 JS 并行下载，减少 FOUT -->
+  <link rel="preload" href="/src/fonts/cityex-sans.woff2" as="font" type="font/woff2" crossorigin>
   <script type="module" src="/src/main.js"></script>
   <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
+  <a class="skip-link" href="#panel">跳到侧栏内容</a>
+  <h1 class="sr-only">YuTuZhi 舆图志 · 中国行政区划交互地图</h1>
+  <div id="a11y-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
   <!-- 顶栏：面包屑 · 搜索 · 图层 -->
   <header id="topbar">
     <nav id="crumb" aria-label="当前位置">
@@ -19,7 +36,7 @@
       <span id="crumb-city" hidden><span class="sep" aria-hidden="true">›</span><button class="crumb-leaf" title="复位视图"></button></span>
       <span id="crumb-county" hidden><span class="sep" aria-hidden="true">›</span><button class="crumb-leaf" title="复位视图"></button></span>
     </nav>
-    <div id="search" class="search" aria-expanded="false" aria-controls="locator">
+    <div id="search" class="search" role="search" aria-expanded="false" aria-controls="locator">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
       <input type="search" placeholder="搜索省、市、区县、乡镇街道、拼音或代码" aria-label="搜索省、市、区县或乡镇" autocomplete="off" enterkeyhint="go">
     </div>
@@ -36,7 +53,7 @@
     </button>
   </header>
 
-  <div id="locator" hidden>
+  <div id="locator" role="listbox" aria-label="行政区划定位" hidden>
     <div class="locator-body"></div>
   </div>
 
@@ -44,7 +61,7 @@
 
   <main id="stage">
     <canvas id="basemap" hidden aria-hidden="true"></canvas>
-    <svg id="map" xmlns="http://www.w3.org/2000/svg"></svg>
+    <svg id="map" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="中国行政区划地图，可通过侧栏或点击区域下钻"></svg>
     <!-- 海南省/三沙市视图：三沙市（西沙区、南沙区）远在南海，用小卡片展示 -->
     <div id="sansha-card" hidden aria-label="三沙市（西沙区、南沙区）">
       <svg aria-hidden="true"></svg>
@@ -63,7 +80,7 @@
   <aside id="panel">
     <button id="panel-toggle" class="panel-handle" type="button" aria-expanded="true" aria-controls="panel" aria-label="收起面板"><span></span></button>
     <section id="region-panel">
-      <div id="info-card"></div>
+      <div id="info-card" aria-live="polite"></div>
       <div class="sub-head">
         <span id="sub-title">省级行政区</span>
         <small id="sub-hint">悬停高亮 · 点击进入</small>

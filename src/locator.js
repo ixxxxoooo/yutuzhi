@@ -1,7 +1,11 @@
 // 定位菜单：顶栏搜索框获得焦点时展开。无输入时为 省份 → 地级市 → 区县 → 乡镇/街道 四级；有输入时为搜索结果
 // @author ygw
-import { provinces, provinceByCode, cities, cityByCode, citiesOf, units, unitByCode, unitsOf, unitsOfCity, getRawTowns, loadTowns } from './map.js';
+import {
+  provinces, provinceByCode, cities, cityByCode, citiesOf, units, unitByCode, unitsOf, unitsOfCity,
+  getRawTowns, getTownsIndex, loadTownsIndex, loadTownsForProvince,
+} from './map.js';
 import { esc, narrowScreen, debounce } from './dom.js';
+import { SEARCH_DEBOUNCE_MS } from './constants.js';
 
 const REGIONS = [
   ['华北', '1'], ['东北', '2'], ['华东', '3'], ['中南', '4'], ['西南', '5'], ['西北', '6'], ['港澳台', '78'],
@@ -26,45 +30,57 @@ const score = (item, q) => {
   return item.py.includes(a) ? 5 : -1;
 };
 
-const search = q => {
+/**
+ * 四级全文检索
+ * @param {string} q - 查询词
+ * @returns {Array}
+ */
+export const search = q => {
   const hits = [];
 
-  // 优先搜索省级（数量少，优先展示）
   for (const p of provinces) {
     if (p.single) continue;
     const s = score(p, q);
     if (s >= 0) hits.push({ item: { code: p.code, province: p.code, isProvince: true, name: p.name }, s });
   }
 
-  // 搜索地级市
   for (const c of cities) {
     if (c.single || provinceByCode.get(c.province).direct) continue;
     const s = score(c, q);
     if (s >= 0) hits.push({ item: { code: c.code, cityCode: c.code, province: c.province, isCityGroup: true, name: c.name }, s });
   }
 
-  // 搜索县级行政区
   for (const u of units) {
     const s = score(u, q);
     if (s >= 0) hits.push({ item: u, s });
   }
 
-  // 搜索四级乡镇/街道
-  const rawTowns = getRawTowns();
-  if (rawTowns && q.length >= 2) {
+  // 乡镇：优先用轻量搜索索引；未加载时回退到已加载省级分片
+  if (q.length >= 2) {
     let townHits = 0;
-    for (const [unitCode, list] of Object.entries(rawTowns)) {
-      for (const [code, name, short, py, pi] of list) {
+    const index = getTownsIndex();
+    if (index) {
+      for (const [code, name, short, py, pi, unitCode] of index) {
         const s = score({ code, name, short, py, pi }, q);
         if (s >= 0) {
-          hits.push({
-            item: { code, name, short, unitCode, isTown: true },
-            s: s + 0.5, // 同名时省市区县排在乡镇前面
-          });
+          hits.push({ item: { code, name, short, unitCode, isTown: true }, s: s + 0.5 });
           if (++townHits >= 80) break;
         }
       }
-      if (townHits >= 80) break;
+    } else {
+      const rawTowns = getRawTowns();
+      if (rawTowns) {
+        for (const [unitCode, list] of Object.entries(rawTowns)) {
+          for (const [code, name, short, py, pi] of list) {
+            const s = score({ code, name, short, py, pi }, q);
+            if (s >= 0) {
+              hits.push({ item: { code, name, short, unitCode, isTown: true }, s: s + 0.5 });
+              if (++townHits >= 80) break;
+            }
+          }
+          if (townHits >= 80) break;
+        }
+      }
     }
   }
 
@@ -181,10 +197,15 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
 
   const open = () => {
     if (!panel.hidden) return;
-    loadTowns().then(() => { if (!panel.hidden) render(); });
+    // 打开时预热搜索索引（不阻塞 UI）
+    loadTownsIndex().then(() => { if (!panel.hidden && input.value.trim()) render(); });
     currentProv = getActiveProvince();
     currentCity = getActiveCity();
     currentCounty = getActiveCounty?.() ?? null;
+    if (currentCounty) {
+      const u = unitByCode.get(currentCounty);
+      if (u) loadTownsForProvince(u.province).then(() => { if (!panel.hidden) render(); });
+    }
     topbar.classList.add('searching');
     render();
     panel.style.top = `${topbar.getBoundingClientRect().bottom - 8}px`;
@@ -208,13 +229,18 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
     input.focus();
   });
   // 搜索防抖：避免每次击键都触发全量搜索
-  const debouncedRender = debounce(() => { if (!panel.hidden) render(); }, 120);
+  const debouncedRender = debounce(() => {
+    if (panel.hidden) return;
+    const q = input.value.trim();
+    if (q.length >= 2) loadTownsIndex().then(() => { if (!panel.hidden) render(); });
+    else render();
+  }, SEARCH_DEBOUNCE_MS);
 
   input.addEventListener('focus', open);
   input.addEventListener('input', () => {
     open();
     if (input.value.trim()) debouncedRender();
-    else render(); // 清空输入时立即显示导航面板
+    else render();
   });
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') body.querySelector('button[data-town], button[data-unit], button[data-view-city], button[data-view-province], button[data-county-drill], button[data-city-drill], button[data-prov-drill]')?.click();
@@ -275,8 +301,10 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
     } else if (b.dataset.countyDrill) {
       currentCounty = b.dataset.countyDrill;
       input.value = '';
-      if (getRawTowns()) render();
-      else loadTowns().then(render);
+      const u = unitByCode.get(currentCounty);
+      if (u && getRawTowns()?.[currentCounty]) render();
+      else if (u) loadTownsForProvince(u.province).then(render);
+      else render();
     } else if (b.dataset.viewProvince) {
       close();
       onProvince(b.dataset.viewProvince);

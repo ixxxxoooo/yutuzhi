@@ -8,6 +8,11 @@
 
 const overlaps = (a, b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
 
+/** 模块级复用 Canvas 2D 上下文，避免每次布局新建 */
+const layoutCtx = typeof document !== 'undefined'
+  ? document.createElement('canvas').getContext('2d')
+  : null;
+
 export const labelBox = (x, y, text, s) => {
   const w = text.length * s * 0.92 + 6, h = s + 4;
   return { x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2 };
@@ -34,7 +39,7 @@ export const layoutLabels = ({ units, pathOf, view: { vx, vy, k }, bounds, base,
   const dots = anchors.map(a => ({ x0: a.x - 4, x1: a.x + 4, y0: a.y - 4, y1: a.y + 4, code: a.u.code }));
   const free = (box, code) => inBounds(box) && !placed.some(b => overlaps(b, box)) && !dots.some(d => d.code !== code && overlaps(d, box));
 
-  const ctx = document.createElement('canvas').getContext('2d');
+  const ctx = layoutCtx || document.createElement('canvas').getContext('2d');
   const shapes = new Map();
   const getShape = code => {
     let s = shapes.get(code);

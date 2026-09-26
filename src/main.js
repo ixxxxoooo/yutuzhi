@@ -2,8 +2,8 @@
 // @author ygw
 import './card.css';
 import {
-  buildMap, setHover, setSelected, setActiveRegion, renderCountyTowns, animateView, loadFine, loadTowns, setDetail, setScale, fitView,
-  provinceView, cityView, unitView, unitsPerPixel, currentView, svgRect, provinces,
+  buildMap, setHover, setSelected, setActiveRegion, renderCountyTowns, animateView, loadFine, loadTownsForProvince, ensureTownsOfUnit, setDetail, setScale, fitView,
+  provinceView, cityView, unitView, unitsPerPixel, currentView, svgRect, provinces, clearRectCache,
   unitByCode, cityByCode, provinceByCode, getTownByCode, unitsOf, citiesOf, unitsOfCity, townsOfUnit,
   unitPath, cityPath, townPath, ensureProvinceCityLabels, ensureCityUnitLabels, ensureUnitTownLabels,
   buildSanshaCard, SANSHA_CODES, isSansha, FULL_VIEW,
@@ -13,8 +13,16 @@ import { layoutLabels, leaderEnd } from './label-layout.js';
 import { attachGestures } from './gesture.js';
 import { createLocator } from './locator.js';
 import { createBasemap, createLayerUI } from './basemap.js';
-import { getSaveButtonLabel, generateMapPoster } from './export-map.js';
 import { $, esc, narrowScreen } from './dom.js';
+import { createViewState } from './view-state.js';
+import {
+  LABEL_PX, PROV_LABEL_PX, PROV_LABEL_ZOOM, MAX_ZOOM, PROV_LABEL_BASE_PX, LEADER_DOT,
+  FLY_DURATION, RESET_DURATION, REFIT_DURATION, LABEL_RELAYOUT_DELAY,
+  HOVER_CARD_PAD, HOVER_CARD_OFFSET, HOVER_CARD_FALLBACK, LABEL_INSET, LABEL_SCALES,
+  SANSHA_CARD_OFFSET, SANSHA_CITY_CODE, PANEL_DRAG_THRESHOLD,
+  MAX_PRELOAD_RETRIES, PRELOAD_RETRY_BASE_MS, IDLE_PRELOAD_TIMEOUT, PRELOAD_FALLBACK_DELAY,
+  LONG_PRESS_MS,
+} from './constants.js';
 import { inject } from '@vercel/analytics';
 
 inject();
@@ -35,11 +43,7 @@ const exportModalTitle = $('#export-modal-title');
 const exportImg = $('#export-img');
 const exportDownload = $('#export-download');
 const root = document.documentElement;
-
-const LABEL_PX = 13;       // 省视图地级市名、市视图区县名、区县视图乡镇名的基准屏幕字号
-const PROV_LABEL_PX = 14;  // 全国视图放大后省名的屏幕字号
-const PROV_LABEL_ZOOM = 2; // 全国视图放大到几倍后展开全部省名、换精细版
-const MAX_ZOOM = { country: 16, province: 12, city: 12, county: 10 };
+const liveRegion = $('#a11y-live');
 
 // ---------- 初始化地图 ----------
 buildMap(svg);
@@ -53,6 +57,12 @@ let selectedTown = null;        // 区县视图下点击固定的乡镇代码
 let hoveredTarget = null;       // 当前鼠标悬停目标 { type, code, isNeighbor }
 let home = null;                // 当前视图的完整范围（缩放下限、复位目标）
 let pendingFocus = null;        // 视图切换后要聚焦的目标代码
+const vs = createViewState();   // 仅使用导航代际 token
+
+/** 向屏幕阅读器播报当前区域 */
+const announce = text => {
+  if (liveRegion) liveRegion.textContent = text;
+};
 
 const currentViewMode = () => (activeCounty ? 'county' : activeCity ? 'city' : activeProvince ? 'province' : 'country');
 
@@ -129,13 +139,13 @@ const renderHoverCard = (target, clientX, clientY) => {
 
 const positionHoverCard = (clientX, clientY) => {
   if (hoverCard.hidden) return;
-  const pad = 16;
-  const w = hoverCard.offsetWidth || 280;
-  const h = hoverCard.offsetHeight || 160;
-  let x = clientX + 18;
-  let y = clientY + 18;
-  if (x + w + pad > innerWidth) x = Math.max(pad, clientX - w - 16);
-  if (y + h + pad > innerHeight) y = Math.max(pad, clientY - h - 16);
+  const pad = HOVER_CARD_PAD;
+  const w = hoverCard.offsetWidth || HOVER_CARD_FALLBACK.w;
+  const h = hoverCard.offsetHeight || HOVER_CARD_FALLBACK.h;
+  let x = clientX + HOVER_CARD_OFFSET;
+  let y = clientY + HOVER_CARD_OFFSET;
+  if (x + w + pad > innerWidth) x = Math.max(pad, clientX - w - HOVER_CARD_PAD);
+  if (y + h + pad > innerHeight) y = Math.max(pad, clientY - h - HOVER_CARD_PAD);
   hoverCard.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
 };
 
@@ -275,6 +285,45 @@ svg.addEventListener('pointerleave', () => {
   updateHover(null);
 });
 
+// 触屏长按：显示区域信息（触屏无 hover）
+let longPressTimer = 0;
+let longPressTarget = null;
+svg.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  clearTimeout(longPressTimer);
+  const target = resolveMapTarget(e.target);
+  longPressTarget = target;
+  longPressTimer = setTimeout(() => {
+    if (longPressTarget) {
+      updateHover(longPressTarget, e.clientX, e.clientY, true);
+      if (navigator.vibrate) navigator.vibrate(12);
+    }
+  }, LONG_PRESS_MS);
+});
+const cancelLongPress = () => {
+  clearTimeout(longPressTimer);
+  longPressTarget = null;
+};
+svg.addEventListener('pointerup', cancelLongPress);
+svg.addEventListener('pointercancel', cancelLongPress);
+svg.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch' && longPressTarget) {
+    // 轻微移动则取消长按
+    cancelLongPress();
+  }
+});
+
+// 键盘：省视图下 Tab 聚焦省份组，Enter/Space 进入
+svg.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const prov = e.target.closest?.('.prov[data-province]');
+  if (!prov) return;
+  e.preventDefault();
+  const code = prov.dataset.province;
+  const p = provinceByCode.get(code);
+  if (p && !p.single) goProvince(code);
+});
+
 cityListEl.addEventListener('pointerover', e => {
   if (e.pointerType === 'touch') return;
   const b = e.target.closest('button[data-type][data-code]');
@@ -308,7 +357,6 @@ cityListEl.addEventListener('click', e => {
 
 // ---------- 随视图同步的显示状态 ----------
 const NS = 'http://www.w3.org/2000/svg';
-const LEADER_DOT = 3; // 引线端点圆点半径（屏幕像素）
 
 const setLabelSize = view => {
   const upp = unitsPerPixel(svg, view);
@@ -327,9 +375,9 @@ const applyGroupLabels = (g, items, pathOf, view) => {
     units: items,
     pathOf,
     view: { vx: view[0], vy: view[1], k },
-    bounds: { x0: left + 6, y0: top + 6, x1: width - right - 6, y1: height - bottom - 6 },
+    bounds: { x0: left + LABEL_INSET, y0: top + LABEL_INSET, x1: width - right - LABEL_INSET, y1: height - bottom - LABEL_INSET },
     base: LABEL_PX,
-    scales: [1, 0.86, 0.74],
+    scales: LABEL_SCALES,
   });
   const leaders = g.querySelector('.leaders');
   leaders.replaceChildren();
@@ -383,7 +431,7 @@ const updateCountryLabels = view => {
   const zoomed = !activeProvince && home && home[2] / view[2] >= PROV_LABEL_ZOOM;
   svg.classList.toggle('zoomed', zoomed);
   if (!activeProvince) {
-    svg.style.setProperty('--prov-label-size', `${(zoomed ? PROV_LABEL_PX : 12.5) * unitsPerPixel(svg, view)}px`);
+    svg.style.setProperty('--prov-label-size', `${(zoomed ? PROV_LABEL_PX : PROV_LABEL_BASE_PX) * unitsPerPixel(svg, view)}px`);
   }
 };
 
@@ -438,7 +486,7 @@ const applySelectedTown = code => {
 };
 
 let flyingTarget = null;
-const flyTo = async () => {
+const flyTo = async (gen = vs.navGeneration) => {
   const focus = pendingFocus;
   pendingFocus = null;
   if (focus && activeCounty && focus.length > 6) applySelectedTown(focus);
@@ -447,14 +495,25 @@ const flyTo = async () => {
   if (activeProvince) layoutActiveLabels(target);
   syncLabels(target);
   if (activeProvince) syncDetail();
-  await animateView(svg, target, 620, syncScale);
+  await animateView(svg, target, FLY_DURATION, syncScale);
+  if (!vs.isCurrentNav(gen)) return;
   flyingTarget = null;
   syncDetail();
 };
 
 const syncSaveBtnLabel = () => {
   if (!saveBtnLabel) return;
-  const label = getSaveButtonLabel({ activeProvince, activeCity, activeCounty });
+  let label = '保存全国图';
+  if (activeCounty) {
+    const u = unitByCode.get(activeCounty);
+    label = `保存${u?.short || '区县'}图`;
+  } else if (activeCity) {
+    const c = cityByCode.get(activeCity);
+    label = `保存${c?.short || '城市'}图`;
+  } else if (activeProvince) {
+    const p = provinceByCode.get(activeProvince);
+    label = `保存${p?.short || '省份'}图`;
+  }
   saveBtnLabel.textContent = label;
   saveBtn.title = `${label}（高清 PNG）`;
 };
@@ -465,6 +524,7 @@ const clearTownLayer = () => {
 };
 
 const enterProvince = async code => {
+  const gen = vs.beginNav();
   const p = provinceByCode.get(code);
   if (!p || p.single) return showCountry();
   if (p.direct) return enterCity(code);
@@ -493,11 +553,14 @@ const enterProvince = async code => {
   syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
+  announce(`已进入${p.name}`);
   home = provinceFit(code);
-  await flyTo();
+  if (!vs.isCurrentNav(gen)) return;
+  await flyTo(gen);
 };
 
 const enterCity = async cityCode => {
+  const gen = vs.beginNav();
   const c = cityByCode.get(cityCode);
   if (!c) return showCountry();
   const p = provinceByCode.get(c.province);
@@ -533,18 +596,29 @@ const enterCity = async cityCode => {
   syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
+  announce(`已进入${c.name}`);
   home = cityFit(c.code);
-  await flyTo();
+  if (!vs.isCurrentNav(gen)) return;
+  await flyTo(gen);
 };
 
 const enterCounty = async unitCode => {
+  const gen = vs.beginNav();
   const u = unitByCode.get(unitCode);
   if (!u || !u.d) return showCountry();
-  await Promise.all([loadFine(), loadTowns()]);
+  await Promise.all([loadFine(), loadTownsForProvince(u.province)]);
+  if (!vs.isCurrentNav(gen)) return;
+  // await 后再次确认目标仍对应当前 hash
+  const hashCode = location.hash.match(/^#\/(\d{6,9})$/)?.[1];
+  if (hashCode && hashCode.slice(0, 6) !== unitCode && hashCode !== unitCode) return;
   if (!u.towns) {
     const c = cityByCode.get(u.city);
     return enterCity(c.code);
   }
+  await ensureTownsOfUnit(u.code);
+  if (!vs.isCurrentNav(gen)) return;
+  const hashAfter = location.hash.match(/^#\/(\d{6,9})$/)?.[1];
+  if (hashAfter && hashAfter.slice(0, 6) !== unitCode && hashAfter !== unitCode) return;
   const c = cityByCode.get(u.city);
   const p = provinceByCode.get(u.province);
   activeProvince = p.code;
@@ -585,11 +659,14 @@ const enterCounty = async unitCode => {
   syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
+  announce(`已进入${u.name}`);
   home = countyFit(u.code);
-  await flyTo();
+  if (!vs.isCurrentNav(gen)) return;
+  await flyTo(gen);
 };
 
 const showCountry = async () => {
+  const gen = vs.beginNav();
   activeProvince = null;
   activeCity = null;
   activeCounty = null;
@@ -609,8 +686,10 @@ const showCountry = async () => {
   syncSaveBtnLabel();
   renderSubList();
   renderInfoCard();
+  announce('全国行政区划总览');
   home = countryFit();
-  await flyTo();
+  if (!vs.isCurrentNav(gen)) return;
+  await flyTo(gen);
 };
 
 // hash 路由：#/140000 省视图，#/140100 市视图，#/140105 区县（乡镇）视图
@@ -692,7 +771,7 @@ const resetView = () => {
   clearTimeout(relayoutTimer);
   if (activeProvince) layoutActiveLabels(home);
   syncLabels(home);
-  animateView(svg, home, 400, syncScale).then(syncDetail);
+  animateView(svg, home, RESET_DURATION, syncScale).then(syncDetail);
 };
 
 // ---------- 顶栏：面包屑与搜索定位 ----------
@@ -723,6 +802,12 @@ const locator = createLocator({
 let lastExportUrl = null;
 const closeExportModal = () => {
   exportModal.hidden = true;
+  if (lastExportUrl) {
+    URL.revokeObjectURL(lastExportUrl);
+    lastExportUrl = null;
+    exportImg.removeAttribute('src');
+    exportDownload.removeAttribute('href');
+  }
 };
 
 exportModal.addEventListener('click', e => {
@@ -735,11 +820,11 @@ saveBtn.addEventListener('click', async () => {
   layerUI.close();
   hoverCard.hidden = true;
 
-  const originalLabel = getSaveButtonLabel({ activeProvince, activeCity, activeCounty });
   saveBtn.disabled = true;
   saveBtnLabel.textContent = '正在生成…';
 
   try {
+    const { getSaveButtonLabel, generateMapPoster } = await import('./export-map.js');
     await loadFine();
     setDetail(svg, 'fine');
     const regionInfo = getRegionData(defaultInfoTarget(), { activeCounty });
@@ -752,7 +837,7 @@ saveBtn.addEventListener('click', async () => {
     });
     if (lastExportUrl) URL.revokeObjectURL(lastExportUrl);
     lastExportUrl = url;
-    exportModalTitle.textContent = `${originalLabel} · ${regionInfo.title}`;
+    exportModalTitle.textContent = `${getSaveButtonLabel({ activeProvince, activeCity, activeCounty })} · ${regionInfo.title}`;
     exportImg.src = url;
     exportDownload.href = url;
     exportDownload.download = filename;
@@ -768,8 +853,8 @@ saveBtn.addEventListener('click', async () => {
 const placeSanshaCard = () => {
   if (sanshaCard.hidden) return;
   const { left = 0, bottom = 0 } = viewInsets();
-  sanshaCard.style.left = `${left + 16}px`;
-  sanshaCard.style.bottom = `${bottom + 16}px`;
+  sanshaCard.style.left = `${left + SANSHA_CARD_OFFSET}px`;
+  sanshaCard.style.bottom = `${bottom + SANSHA_CARD_OFFSET}px`;
 };
 sanshaCard.addEventListener('pointerover', e => {
   const btn = e.target.closest('button[data-code]');
@@ -780,7 +865,7 @@ sanshaCard.addEventListener('click', e => {
   e.stopPropagation();
   const btn = e.target.closest('button[data-code]');
   const code = btn?.dataset.code ?? SANSHA_CODES[0];
-  if (activeCity !== '460300') goCity('460300');
+  if (activeCity !== SANSHA_CITY_CODE) goCity(SANSHA_CITY_CODE);
   else updateHover({ type: 'unit', code, isNeighbor: false });
 });
 
@@ -861,7 +946,7 @@ attachGestures(svg, {
     syncScale(view);
     syncDetail();
     clearTimeout(relayoutTimer);
-    if (activeProvince) relayoutTimer = setTimeout(() => layoutActiveLabels(currentView(svg)), 180);
+    if (activeProvince) relayoutTimer = setTimeout(() => layoutActiveLabels(currentView(svg)), LABEL_RELAYOUT_DELAY);
   },
 });
 
@@ -889,7 +974,7 @@ const refit = (animate = false) => {
   if (activeProvince) layoutActiveLabels(view);
   syncLabels(view);
   placeSanshaCard();
-  if (animate) return animateView(svg, view, 300, syncScale);
+  if (animate) return animateView(svg, view, REFIT_DURATION, syncScale);
   svg.setAttribute('viewBox', view.join(' '));
   syncScale(view);
 };
@@ -911,6 +996,7 @@ const setCollapsed = (collapsed, animate = true) => {
   panelToggle.setAttribute('aria-expanded', !collapsed);
   panelToggle.setAttribute('aria-label', collapsed ? '展开面板' : '收起面板');
   try { localStorage.setItem(PANEL_KEY, collapsed ? '1' : ''); } catch { /* 忽略 */ }
+  clearRectCache();
   if (narrowScreen.matches) refit(animate);
 };
 let dragStart = null;
@@ -922,8 +1008,8 @@ panelToggle.addEventListener('pointerup', e => {
   if (dragStart === null) return;
   const dy = e.clientY - dragStart;
   dragStart = null;
-  if (dy > 24) setCollapsed(true);
-  else if (dy < -24) setCollapsed(false);
+  if (dy > PANEL_DRAG_THRESHOLD) setCollapsed(true);
+  else if (dy < -PANEL_DRAG_THRESHOLD) setCollapsed(false);
   else setCollapsed(!panel.classList.contains('collapsed'));
 });
 panelToggle.addEventListener('pointercancel', () => { dragStart = null; });
@@ -935,13 +1021,13 @@ panelToggle.setAttribute('aria-expanded', !panel.classList.contains('collapsed')
 root.dataset.view = 'country';
 svg.setAttribute('viewBox', countryFit().join(' '));
 syncScale(currentView(svg));
+if (narrowScreen.matches) subHint.textContent = '点击进入 · 长按查看';
 route();
 
-// 首屏之后在后台加载精细版边界与四级乡镇数据
+// 首屏之后在后台仅预加载精细边界（乡镇按省按需加载，避免 idle 拉全量 ~1MB gzip）
 let preloadRetries = 0;
-const MAX_PRELOAD_RETRIES = 2;
 
-const preloadAssets = () => Promise.all([loadFine(), loadTowns()]).then(() => {
+const preloadAssets = () => loadFine().then(() => {
   syncDetail();
   if (activeCounty) {
     renderCountyTowns(svg, activeCounty);
@@ -953,8 +1039,15 @@ const preloadAssets = () => Promise.all([loadFine(), loadTowns()]).then(() => {
   console.warn('[舆图志] 后台资源加载失败，部分功能可能受限：', err);
   if (preloadRetries < MAX_PRELOAD_RETRIES) {
     preloadRetries++;
-    setTimeout(preloadAssets, 2000 * preloadRetries);
+    setTimeout(preloadAssets, PRELOAD_RETRY_BASE_MS * preloadRetries);
   }
 });
-if ('requestIdleCallback' in window) requestIdleCallback(preloadAssets, { timeout: 1200 });
-else setTimeout(preloadAssets, 300);
+if ('requestIdleCallback' in window) requestIdleCallback(preloadAssets, { timeout: IDLE_PRELOAD_TIMEOUT });
+else setTimeout(preloadAssets, PRELOAD_FALLBACK_DELAY);
+
+// HMR：热更新时避免重复绑定全局监听
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    /* 模块卸载时由浏览器回收；此处仅占位防止重复副作用警告 */
+  });
+}
