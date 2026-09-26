@@ -1,6 +1,9 @@
 // SVG 地图：构建 DOM（省/市/区县/乡镇四级）、外边缘高亮提取、乡镇真实坐标分区、viewBox 缩放动画
+// @author ygw
 import data from './map-data.json';
 import { lonLatToSvg, svgToLonLat } from './basemap.js';
+import { parsePathRings, ptInRings, clipRingHalfPlane, ringCentroidAndArea, ringsToD, ringsBBox, outerBoundaryD } from './geometry.js';
+import { TONE_COUNT, extractPathVerts, assignTones } from './topo-color.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const INSET_RADIUS = 6; // 南海插图卡片圆角（viewBox 单位，全国视图下约 5～8px）
@@ -49,103 +52,6 @@ export const unitPath = code => fine?.units[code] ?? coarse.units[code];
 export const cityPath = code => unitsOfCity(code).map(u => unitPath(u.code)).filter(Boolean).join('');
 
 // ---------- 四级乡镇/街道真实坐标辖区剖分 ----------
-const parsePathRings = d => {
-  const rings = [];
-  if (!d) return rings;
-  for (const sp of d.split(/(?=M)/)) {
-    if (!sp) continue;
-    const nums = sp.slice(1).replace(/z$/i, '').trim().split(/[l\s]+/).map(Number);
-    if (nums.length < 6) continue;
-    let x = nums[0], y = nums[1];
-    const r = [[x, y]];
-    for (let i = 2; i < nums.length; i += 2) {
-      x += nums[i];
-      y += nums[i + 1];
-      r.push([x, y]);
-    }
-    rings.push(r);
-  }
-  return rings;
-};
-
-const ptInRing = (px, py, ring) => {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i], [xj, yj] = ring[j];
-    if (((yi > py) !== (yj > py)) && (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi)) inside = !inside;
-  }
-  return inside;
-};
-
-const ptInRings = (px, py, rings) => {
-  let inside = false;
-  for (const r of rings) if (ptInRing(px, py, r)) inside = !inside;
-  return inside;
-};
-
-const clipRingHalfPlane = (ring, mx, my, nx, ny) => {
-  const out = [];
-  const n = ring.length;
-  if (!n) return out;
-  let prev = ring[n - 1];
-  let prevVal = (prev[0] - mx) * nx + (prev[1] - my) * ny;
-  for (let i = 0; i < n; i++) {
-    const curr = ring[i];
-    const currVal = (curr[0] - mx) * nx + (curr[1] - my) * ny;
-    if (currVal <= 0) {
-      if (prevVal > 0) {
-        const t = prevVal / (prevVal - currVal);
-        out.push([prev[0] + (curr[0] - prev[0]) * t, prev[1] + (curr[1] - prev[1]) * t]);
-      }
-      out.push(curr);
-    } else if (prevVal <= 0) {
-      const t = prevVal / (prevVal - currVal);
-      out.push([prev[0] + (curr[0] - prev[0]) * t, prev[1] + (curr[1] - prev[1]) * t]);
-    }
-    prev = curr;
-    prevVal = currVal;
-  }
-  return out;
-};
-
-const ringCentroidAndArea = ring => {
-  let a = 0, cx = 0, cy = 0;
-  for (let i = 0, n = ring.length, j = n - 1; i < n; j = i++) {
-    const cross = ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
-    a += cross;
-    cx += (ring[j][0] + ring[i][0]) * cross;
-    cy += (ring[j][1] + ring[i][1]) * cross;
-  }
-  a /= 2;
-  if (Math.abs(a) < 1e-7) return { area: 0, cx: ring[0]?.[0] ?? 0, cy: ring[0]?.[1] ?? 0 };
-  return { area: Math.abs(a), cx: cx / (6 * a), cy: cy / (6 * a) };
-};
-
-const ringsToD = rings => {
-  let d = '';
-  for (const r of rings) {
-    if (r.length < 3) continue;
-    d += `M${r[0][0].toFixed(2)} ${r[0][1].toFixed(2)}`;
-    for (let i = 1; i < r.length; i++) {
-      d += `L${r[i][0].toFixed(2)} ${r[i][1].toFixed(2)}`;
-    }
-    d += 'Z';
-  }
-  return d;
-};
-
-const ringsBBox = rings => {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const r of rings) {
-    for (const [x, y] of r) {
-      if (x < x0) x0 = x;
-      if (y < y0) y0 = y;
-      if (x > x1) x1 = x;
-      if (y > y1) y1 = y;
-    }
-  }
-  return [x0, y0, x1, y1];
-};
 
 const countyTownsCache = new Map(); // unitCode -> { detail, list }
 const townByCode = new Map();
@@ -299,65 +205,6 @@ export const townsOfUnit = unitCode => {
 
 export const townPath = code => getTownByCode(code)?.d ?? '';
 
-// ---------- 外边缘轮廓提取 ----------
-// 从一组拓扑对齐的区县 path 中消去内部公共边，只保留整块区域最外圈边界（边缘一圈）
-const outerBoundaryD = dList => {
-  const edgeMap = new Map();
-  for (const d of dList) {
-    if (!d) continue;
-    const subpaths = d.split(/(?=M)/);
-    for (const sp of subpaths) {
-      const nums = sp.slice(1).replace(/z$/i, '').trim().split(/[l\s]+/).map(Number);
-      if (nums.length < 4) continue;
-      let x = Math.round(nums[0] * 1000), y = Math.round(nums[1] * 1000);
-      const pts = [[x, y]];
-      for (let i = 2; i < nums.length; i += 2) {
-        x += Math.round(nums[i] * 1000);
-        y += Math.round(nums[i + 1] * 1000);
-        pts.push([x, y]);
-      }
-      for (let i = 0, n = pts.length; i < n; i++) {
-        const a = pts[i], b = pts[(i + 1) % n];
-        if (a[0] === b[0] && a[1] === b[1]) continue;
-        const k1 = `${a[0]},${a[1]}`, k2 = `${b[0]},${b[1]}`;
-        const key = k1 < k2 ? `${k1}:${k2}` : `${k2}:${k1}`;
-        if (edgeMap.has(key)) edgeMap.delete(key);
-        else edgeMap.set(key, [a, b, k1, k2]);
-      }
-    }
-  }
-  const adj = new Map();
-  for (const [key, [a, b, k1, k2]] of edgeMap) {
-    let l1 = adj.get(k1); if (!l1) { l1 = []; adj.set(k1, l1); }
-    let l2 = adj.get(k2); if (!l2) { l2 = []; adj.set(k2, l2); }
-    l1.push({ key, pt: b, k: k2 });
-    l2.push({ key, pt: a, k: k1 });
-  }
-  const used = new Set();
-  let out = '';
-  for (const [key, [a, b, k1, k2]] of edgeMap) {
-    if (used.has(key)) continue;
-    used.add(key);
-    const chain = [a, b];
-    let cur = k2;
-    while (true) {
-      const nexts = adj.get(cur);
-      const next = nexts && nexts.find(e => !used.has(e.key));
-      if (!next) break;
-      used.add(next.key);
-      chain.push(next.pt);
-      cur = next.k;
-    }
-    const closed = cur === k1;
-    out += `M${chain[0][0] / 1000} ${chain[0][1] / 1000}`;
-    for (let i = 1; i < (closed ? chain.length - 1 : chain.length); i++) {
-      out += `L${chain[i][0] / 1000} ${chain[i][1] / 1000}`;
-    }
-    if (closed) out += 'Z';
-  }
-  return out;
-};
-
 const outlineCache = new Map();
 const getOutline = (type, code, detailLevel) => {
   if (type === 'town') return getTownByCode(code)?.d ?? '';
@@ -378,88 +225,8 @@ const getOutline = (type, code, detailLevel) => {
   return d;
 };
 
-const TONE_COUNT = 6;
-const extractPathVerts = d => {
-  const set = new Set();
-  if (!d) return set;
-  for (const sp of d.split(/(?=M)/)) {
-    if (!sp) continue;
-    const isAbs = sp.includes('L');
-    const nums = sp.slice(1).replace(/z$/i, '').trim().split(/[lL\s]+/).map(Number);
-    if (nums.length < 4) continue;
-    let x = nums[0], y = nums[1];
-    set.add(`${Math.round(x * 10)},${Math.round(y * 10)}`);
-    for (let i = 2; i < nums.length; i += 2) {
-      if (isAbs) {
-        x = nums[i];
-        y = nums[i + 1];
-      } else {
-        x += nums[i];
-        y += nums[i + 1];
-      }
-      set.add(`${Math.round(x * 10)},${Math.round(y * 10)}`);
-    }
-  }
-  return set;
-};
-
 const unitVertsMap = new Map();
 for (const u of units) unitVertsMap.set(u.code, extractPathVerts(u.d));
-
-const shareVertices = (setA, setB) => {
-  if (!setA || !setB || !setA.size || !setB.size) return false;
-  const [small, large] = setA.size <= setB.size ? [setA, setB] : [setB, setA];
-  let shared = 0;
-  for (const v of small) {
-    if (large.has(v) && ++shared >= 2) return true;
-  }
-  return false;
-};
-
-const assignTones = (items, getVerts) => {
-  const list = items.filter(it => it.bbox);
-  const n = list.length;
-  const tones = new Map();
-  if (!n) return tones;
-  const verts = list.map(it => getVerts(it));
-  const adj = Array.from({ length: n }, () => []);
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      if (shareVertices(verts[i], verts[j])) {
-        adj[i].push(j);
-        adj[j].push(i);
-      }
-    }
-  }
-  // 按邻接度降序 + 空间位置排序，使贪心四色/六色着色零冲突且色调分布均匀
-  const order = Array.from({ length: n }, (_, i) => i).sort((i, j) => {
-    if (adj[j].length !== adj[i].length) return adj[j].length - adj[i].length;
-    const ay = list[i].bbox[1], by = list[j].bbox[1];
-    return Math.abs(ay - by) > 1 ? ay - by : list[i].bbox[0] - list[j].bbox[0];
-  });
-  const assigned = new Array(n).fill(-1);
-  const usage = new Array(TONE_COUNT).fill(0);
-  for (const idx of order) {
-    const neighborUsed = new Set();
-    for (const nb of adj[idx]) {
-      if (assigned[nb] !== -1) neighborUsed.add(assigned[nb]);
-    }
-    let bestTone = 0;
-    let bestScore = Infinity;
-    for (let t = 0; t < TONE_COUNT; t++) {
-      const conflictPenalty = neighborUsed.has(t) ? 1000 : 0;
-      const score = conflictPenalty + usage[t];
-      if (score < bestScore) {
-        bestScore = score;
-        bestTone = t;
-      }
-    }
-    assigned[idx] = bestTone;
-    usage[bestTone]++;
-    tones.set(list[idx].code, bestTone);
-  }
-  return tones;
-};
 
 const cityVertsMap = new Map();
 for (const c of cities) {

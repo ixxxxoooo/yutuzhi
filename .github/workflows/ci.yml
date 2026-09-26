@@ -1,0 +1,35 @@
+# CI 流水线：构建检查与数据完整性验证
+# @author ygw
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: 数据完整性检查
+        run: npm run check
+
+      - name: 生产构建
+        run: npm run build
+
+      - name: 构建产物体积报告
+        run: |
+          echo "## 构建产物体积" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          du -sh dist/assets/* | sort -rh >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

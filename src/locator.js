@@ -1,6 +1,7 @@
 // 定位菜单：顶栏搜索框获得焦点时展开。无输入时为 省份 → 地级市 → 区县 → 乡镇/街道 四级；有输入时为搜索结果
+// @author ygw
 import { provinces, provinceByCode, cities, cityByCode, citiesOf, units, unitByCode, unitsOf, unitsOfCity, getRawTowns, loadTowns } from './map.js';
-import { esc, narrowScreen } from './dom.js';
+import { esc, narrowScreen, debounce } from './dom.js';
 
 const REGIONS = [
   ['华北', '1'], ['东北', '2'], ['华东', '3'], ['中南', '4'], ['西南', '5'], ['西北', '6'], ['港澳台', '78'],
@@ -26,17 +27,27 @@ const score = (item, q) => {
 };
 
 const search = q => {
-  const hits = [
-    ...units.map(u => ({ item: u, s: score(u, q) })),
-    ...cities.filter(c => !c.single && !provinceByCode.get(c.province).direct).map(c => ({
-      item: { code: c.code, cityCode: c.code, province: c.province, isCityGroup: true, name: c.name },
-      s: score(c, q),
-    })),
-    ...provinces.filter(p => !p.single).map(p => ({
-      item: { code: p.code, province: p.code, isProvince: true, name: p.name },
-      s: score(p, q),
-    })),
-  ].filter(h => h.s >= 0);
+  const hits = [];
+
+  // 优先搜索省级（数量少，优先展示）
+  for (const p of provinces) {
+    if (p.single) continue;
+    const s = score(p, q);
+    if (s >= 0) hits.push({ item: { code: p.code, province: p.code, isProvince: true, name: p.name }, s });
+  }
+
+  // 搜索地级市
+  for (const c of cities) {
+    if (c.single || provinceByCode.get(c.province).direct) continue;
+    const s = score(c, q);
+    if (s >= 0) hits.push({ item: { code: c.code, cityCode: c.code, province: c.province, isCityGroup: true, name: c.name }, s });
+  }
+
+  // 搜索县级行政区
+  for (const u of units) {
+    const s = score(u, q);
+    if (s >= 0) hits.push({ item: u, s });
+  }
 
   // 搜索四级乡镇/街道
   const rawTowns = getRawTowns();
@@ -196,8 +207,15 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
     open();
     input.focus();
   });
+  // 搜索防抖：避免每次击键都触发全量搜索
+  const debouncedRender = debounce(() => { if (!panel.hidden) render(); }, 120);
+
   input.addEventListener('focus', open);
-  input.addEventListener('input', () => { open(); render(); });
+  input.addEventListener('input', () => {
+    open();
+    if (input.value.trim()) debouncedRender();
+    else render(); // 清空输入时立即显示导航面板
+  });
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') body.querySelector('button[data-town], button[data-unit], button[data-view-city], button[data-view-province], button[data-county-drill], button[data-city-drill], button[data-prov-drill]')?.click();
     if (e.key === 'ArrowDown') {
