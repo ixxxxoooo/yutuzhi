@@ -1,0 +1,11 @@
+{
+  "name": "yutuzhi",
+  "compatibility_date": "2025-04-01",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
