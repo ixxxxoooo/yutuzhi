@@ -1,0 +1,762 @@
+/* 得意黑子集（改名 CityEx Sans，见 scripts/build-font.mjs） */
+@font-face {
+  font-family: 'CityEx Sans';
+  src: url('./fonts/cityex-sans.woff2') format('woff2');
+  font-display: swap;
+}
+
+/* ============ 变量 ============ */
+:root {
+  --bg: #f3efe6;           /* 页面与海面 */
+  --land: #ffffff;         /* 默认陆地底色 */
+  --ink: #222222;          /* 文字、粗边框、国界 */
+  --muted: #6b665c;        /* 次要文字 */
+  --panel: rgba(255, 255, 255, .94);
+  --paper: #fbf9f4;        /* 南海插图卡片底色 */
+  --soft: #f6f3ec;         /* 浅底色块 */
+  --hover: #f4f1ea;        /* 按钮悬停色 */
+  --shadow: rgba(0, 0, 0, .12);
+  --focus: #2563eb;
+
+  /* 悬停高亮配色：高饱和暖金填充 + 外发光与醒目朱红外圈描边（最高视觉重点） */
+  --hl-fill: #fde047;
+  --hl-fill-neighbor: #fef08a;
+  --hl-border: #ff1e1e;
+  --hl-glow: rgba(255, 34, 24, .32);
+  --hl-halo: #ffffff;
+
+  /* 选中固定配色：清亮天蓝填充 + 深蓝外圈描边 */
+  --sel-fill: #bae6fd;
+  --sel-border: #0284c7;
+
+  /* 当前激活板块内子区域的六色柔和舆图色板（邻接区域微差着色，配合深色边界线提升区分度） */
+  --tone-0: #fffdf4;
+  --tone-1: #e2f3ea;
+  --tone-2: #fdebd6;
+  --tone-3: #e2eefb;
+  --tone-4: #eee5fb;
+  --tone-5: #fce4e6;
+
+  /* 地图线条层级 */
+  --line-city: #b7b0a0;
+  --line-city-active: #26231e;
+  --line-province: #1f1d19;
+  --divider: #d8d2c4;
+
+  /* 省/市/区县视图里淡化的非当前板块（明显退后，与当前高亮板块形成强对比） */
+  --dim-outer: #d5cebf;
+  --dim: #dfd9ca;
+  --dim-inner: #e7e1d3;
+  --dim-line: #aba393;
+
+  --font: 'CityEx Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --panel-w: 308px;
+  --gap: 16px;
+  color-scheme: light;
+}
+
+/* ============ 基础 ============ */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+html { touch-action: pan-x pan-y; overscroll-behavior: none; }
+body {
+  overscroll-behavior: none;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.4 var(--font);
+  -webkit-tap-highlight-color: transparent;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.noscript { margin: 40vh 16px 0; text-align: center; }
+
+/* ============ 通用按钮 ============ */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  padding: 6px 12px; border: 2px solid var(--ink); border-radius: 7px; background: #fff;
+  color: var(--ink); text-decoration: none;
+  box-shadow: 2px 3px 0 var(--shadow);
+}
+.btn:active { transform: translateY(1px); box-shadow: none; }
+.btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+#city-list button, .loc-grid button, .loc-head button, .loc-list button {
+  border: 1.5px solid var(--ink); border-radius: 6px; background: #fff;
+  transition: background .12s, border-color .12s, transform .1s;
+}
+
+/* ============ 布局 ============ */
+#stage { position: fixed; inset: 0; }
+#basemap { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+#map {
+  position: relative; width: 100%; height: 100%; display: block;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.locator-body, #layer-menu, #city-list { overscroll-behavior: contain; }
+
+/* ---------- 顶栏：面包屑 · 搜索 · 图层 ---------- */
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 4;
+  display: flex; align-items: center; gap: 14px;
+  padding: max(12px, env(safe-area-inset-top)) max(var(--gap), env(safe-area-inset-right)) 16px max(var(--gap), env(safe-area-inset-left));
+  pointer-events: none;
+  background: linear-gradient(var(--bg) 60%, color-mix(in srgb, var(--bg) 0%, transparent));
+}
+[data-basemap] #topbar {
+  background: linear-gradient(rgba(243, 239, 230, .82) 40%, transparent);
+}
+[data-basemap-dark] #topbar {
+  background: linear-gradient(rgba(15, 22, 32, .72) 40%, transparent);
+}
+#topbar > * { pointer-events: auto; }
+#crumb { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+.crumb-root { border: 0; background: none; padding: 0; font-size: 26px; font-weight: bold; letter-spacing: 1px; }
+#crumb-province, #crumb-city, #crumb-county { display: inline-flex; align-items: baseline; gap: 6px; font-size: 22px; min-width: 0; }
+#crumb .sep { color: var(--muted); }
+.crumb-leaf {
+  border: 0; background: none; padding: 0; font: inherit; font-weight: bold;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-view="province"] .crumb-root,
+[data-view="city"] .crumb-root,
+[data-view="county"] .crumb-root,
+#crumb:has(#crumb-city:not([hidden])) #crumb-province .crumb-leaf,
+#crumb:has(#crumb-county:not([hidden])) #crumb-city .crumb-leaf { color: var(--muted); font-size: 20px; }
+[data-basemap-dark] #crumb button,
+[data-basemap-dark] #crumb .sep { color: #fff; text-shadow: 0 1px 4px rgba(0, 0, 0, .85); }
+[data-basemap-dark][data-view="province"] .crumb-root,
+[data-basemap-dark][data-view="city"] .crumb-root,
+[data-basemap-dark][data-view="county"] .crumb-root,
+[data-basemap-dark] #crumb:has(#crumb-city:not([hidden])) #crumb-province .crumb-leaf,
+[data-basemap-dark] #crumb:has(#crumb-county:not([hidden])) #crumb-city .crumb-leaf { color: rgba(255, 255, 255, .78); }
+
+.search {
+  display: flex; align-items: center; gap: 8px; flex: 0 1 320px; min-width: 0;
+  padding: 0 12px; height: 38px; border: 2px solid var(--ink); border-radius: 8px; background: #fff;
+  color: var(--muted); cursor: text;
+}
+.search svg { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font: inherit; color: var(--ink); }
+.search input::placeholder { color: var(--muted); }
+.search[aria-expanded="true"] { box-shadow: 0 0 0 3px var(--hl-fill); color: var(--ink); }
+
+#topbar .btn { height: 38px; }
+#layer-btn { margin-left: auto; }
+#layer-btn.layer-active, #layer-btn[aria-expanded="true"] { background: var(--hl-fill); }
+
+/* ---------- 鼠标跟随实时信息浮窗 (#hover-card) ---------- */
+#hover-card {
+  position: fixed; top: 0; left: 0; z-index: 25;
+  width: 288px; padding: 11px 13px;
+  background: rgba(255, 255, 255, .96);
+  backdrop-filter: blur(8px);
+  border: 2px solid var(--ink); border-radius: 10px;
+  box-shadow: 4px 6px 0 rgba(0, 0, 0, .16);
+  pointer-events: none;
+  will-change: transform;
+}
+.hc-head {
+  display: flex; align-items: center; gap: 6px;
+  padding-bottom: 7px; border-bottom: 1.5px dashed var(--divider);
+}
+.hc-head b { font-size: 18px; line-height: 1.2; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hc-badge {
+  flex: none; padding: 1px 6px; border-radius: 4px;
+  background: var(--hl-fill); border: 1.5px solid var(--ink);
+  font-size: 11px; font-weight: bold;
+}
+.hc-code {
+  flex: none; font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); background: var(--soft); padding: 2px 5px; border-radius: 4px;
+}
+.hc-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px;
+  margin-top: 8px;
+}
+.hc-item {
+  display: flex; flex-direction: column; min-width: 0;
+  padding: 5px 7px; border-radius: 6px; background: var(--soft);
+}
+.hc-item span { font-size: 11px; color: var(--muted); }
+.hc-item b { font-size: 14px; line-height: 1.25; margin-top: 1px; }
+.hc-item small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hc-hint {
+  margin-top: 7px; padding-top: 5px; border-top: 1px solid var(--divider);
+  font-size: 11px; color: var(--muted); text-align: right;
+}
+
+/* ---------- 侧栏：区域详情卡片 + 下辖行政区列表 ---------- */
+#panel {
+  position: fixed; z-index: 3; top: 68px; right: max(var(--gap), env(safe-area-inset-right)); width: var(--panel-w);
+  max-height: calc(100vh - 68px - var(--gap));
+  max-height: calc(100dvh - 68px - var(--gap));
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 2px solid var(--ink); border-radius: 11px;
+  background: var(--panel); backdrop-filter: blur(8px);
+  box-shadow: 3px 5px 0 rgba(0, 0, 0, .09);
+}
+#region-panel { display: flex; flex-direction: column; gap: 10px; padding: 13px; min-height: 0; flex: 1; }
+
+#info-card { display: flex; flex-direction: column; gap: 8px; }
+.info-head { display: flex; flex-direction: column; gap: 3px; }
+.info-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.info-title { margin: 0; font-size: 22px; line-height: 1.2; }
+.info-badge {
+  flex: none; padding: 2px 8px; border-radius: 5px;
+  background: var(--hl-fill); border: 1.5px solid var(--ink);
+  font-size: 12px; font-weight: bold;
+}
+.info-badge.pinned { background: var(--sel-fill); }
+.info-sub { font-size: 12px; color: var(--muted); }
+
+.info-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.info-stat {
+  display: flex; flex-direction: column; min-width: 0;
+  padding: 6px 8px; border-radius: 7px;
+  background: var(--soft); border: 1px solid var(--divider);
+}
+.stat-label { font-size: 11px; color: var(--muted); }
+.stat-val { font-size: 15px; line-height: 1.25; margin: 1px 0; }
+.stat-note { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.info-foot {
+  padding: 6px 8px; border-radius: 6px; background: var(--soft);
+  font-size: 12px; color: var(--muted); line-height: 1.35;
+}
+
+.sub-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding-top: 8px; border-top: 1.5px dashed var(--divider);
+  font-size: 13px; font-weight: bold;
+}
+.sub-head small { font-size: 11px; font-weight: normal; color: var(--muted); }
+
+#city-list {
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px;
+  overflow-y: auto; padding-right: 2px;
+}
+#city-list button {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 3px 8px; font-size: 13px;
+}
+#city-list button small { font-size: 11px; color: var(--muted); }
+#city-list button.hovered,
+#sansha-card .name.hovered {
+  background: var(--hl-fill);
+  border-color: var(--hl-border);
+  box-shadow: 0 0 0 1.5px var(--hl-border);
+}
+#city-list button.selected,
+#sansha-card .name.selected {
+  background: var(--sel-fill);
+  border-color: var(--sel-border);
+  box-shadow: 0 0 0 1.5px var(--sel-border);
+  font-weight: bold;
+}
+
+/* 手机端面板把手（宽屏不显示） */
+.panel-handle { display: none; }
+
+/* ---------- 三沙卡片（海南省/三沙市视图） ---------- */
+#sansha-card {
+  position: fixed; z-index: 2; width: 140px; padding: 6px 6px 8px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  border: 2px solid var(--ink); border-radius: 10px; background: var(--paper);
+  box-shadow: 3px 5px 0 var(--shadow);
+}
+#sansha-card svg { width: 100%; aspect-ratio: 150 / 181; display: block; }
+#sansha-card .land { fill: var(--dim); stroke: var(--dim-line); stroke-width: .4; }
+#sansha-card .sansha { fill: #fff; stroke: var(--ink); stroke-width: 1.2; }
+#sansha-card .sansha.hovered { fill: var(--hl-fill); stroke: var(--hl-border); stroke-width: 2; }
+#sansha-card .sansha.selected { fill: var(--sel-fill); stroke: var(--sel-border); stroke-width: 2; }
+#sansha-card .jd { stroke-width: .5; vector-effect: none; }
+#sansha-card .sansha-btns { display: flex; gap: 4px; width: 100%; justify-content: center; }
+#sansha-card .name {
+  flex: 1; font-size: 13px; font-weight: bold; padding: 2px 4px;
+  border: 1.5px solid var(--ink); border-radius: 6px; background: #fff;
+}
+#sansha-card .caption { font-size: 11px; color: var(--muted); }
+
+/* ---------- 定位菜单 ---------- */
+#locator {
+  position: fixed; z-index: 5; top: 60px; left: 16px; width: 390px; max-height: min(72vh, 640px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: #fff; border: 2px solid var(--ink); border-radius: 8px;
+  box-shadow: 3px 6px 0 var(--shadow);
+}
+.locator-body { overflow-y: auto; padding: 10px 10px 12px; }
+.locator-body section + section { margin-top: 8px; }
+.locator-body h3 { margin: 4px 0; font-size: 13px; font-weight: normal; color: var(--muted); }
+.loc-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.loc-grid button { display: inline-flex; align-items: baseline; gap: 4px; padding: 4px 8px; font-size: 14px; }
+.loc-grid small, .loc-list small { color: var(--muted); font-size: 11px; }
+.loc-head { position: sticky; top: 0; display: flex; align-items: center; gap: 8px; padding: 2px 0 8px; background: #fff; }
+.loc-head b { flex: 1; font-size: 17px; }
+.loc-head button { padding: 3px 8px; font-size: 13px; }
+.loc-list { display: flex; flex-direction: column; gap: 4px; }
+.loc-list button { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px; text-align: left; }
+.loc-list b { font-weight: normal; }
+.loc-empty { color: var(--muted); font-size: 14px; }
+
+/* ---------- 图层选择菜单 ---------- */
+#layer-menu {
+  position: fixed; z-index: 6; top: 60px; right: max(var(--gap), env(safe-area-inset-right));
+  width: min(344px, calc(100vw - 16px)); max-height: min(78vh, 660px);
+  overflow-y: auto; padding: 12px 14px 14px;
+  display: flex; flex-direction: column; gap: 12px;
+  background: #fff; border: 2px solid var(--ink); border-radius: 10px;
+  box-shadow: 3px 6px 0 var(--shadow);
+}
+.layer-sec { display: flex; flex-direction: column; gap: 6px; }
+.layer-sec + .layer-sec { padding-top: 10px; border-top: 1.5px dashed var(--divider); }
+.layer-sec h3 { margin: 0; font-size: 13px; font-weight: normal; color: var(--muted); }
+.layer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.layer-card {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; text-align: left;
+  border: 1.5px solid var(--ink); border-radius: 7px; background: #fff;
+}
+.layer-card.active { background: var(--hl-fill); outline: 2px solid var(--ink); }
+.layer-swatch {
+  flex: none; width: 32px; height: 32px; border-radius: 5px; border: 1.5px solid var(--ink);
+  display: inline-block; position: relative; overflow: hidden;
+}
+.layer-swatch[data-swatch="paper"] { background: linear-gradient(135deg, #fbf9f4 55%, #f3efe6 55%); }
+.layer-swatch[data-swatch="street"] {
+  background:
+    linear-gradient(25deg, transparent 42%, #f59e0b 43%, #f59e0b 54%, transparent 55%),
+    linear-gradient(-35deg, transparent 45%, #cbd5e1 46%, #cbd5e1 55%, transparent 56%),
+    linear-gradient(150deg, #f8fafc 60%, #93c5fd 61%);
+}
+.layer-swatch[data-swatch="satellite"] {
+  background: radial-gradient(circle at 30% 35%, #1e4620 0%, #0d2b1d 55%, #0a192f 100%);
+}
+.layer-swatch[data-swatch="topo"] {
+  background:
+    repeating-radial-gradient(circle at 75% 25%, transparent 0 4px, rgba(180, 120, 60, .35) 4px 5.5px),
+    linear-gradient(135deg, #d9ead3 0%, #f4e3c1 65%, #b6d7a8 100%);
+}
+.layer-swatch[data-swatch="shaded"] {
+  background: linear-gradient(125deg, #d6d1c4 0%, #8f897b 45%, #e8e4da 52%, #b5afa1 100%);
+}
+.layer-meta { display: flex; flex-direction: column; min-width: 0; }
+.layer-meta b { font-size: 14px; line-height: 1.2; }
+.layer-meta small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.layer-toggles { display: flex; flex-direction: column; gap: 5px; }
+.layer-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 9px; text-align: left; border: 1.5px solid var(--ink); border-radius: 7px; background: #fff;
+}
+.layer-toggle span { display: flex; flex-direction: column; font-size: 13px; }
+.layer-toggle small { font-size: 11px; color: var(--muted); }
+.layer-toggle .chk {
+  flex: none; width: 18px; height: 18px; border-radius: 4px; border: 1.5px solid var(--ink); background: #fff;
+  position: relative;
+}
+.layer-toggle.active { background: var(--soft); }
+.layer-toggle.active .chk { background: var(--ink); }
+.layer-toggle.active .chk::after {
+  content: ''; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+
+/* ============ 地图四级视觉层级与悬停高亮 ============ */
+#map path { vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.sea { fill: var(--bg); }
+
+/* 默认陆地与分界线 */
+.unit { fill: var(--land); stroke: var(--land); stroke-width: .55px; transition: fill .12s; }
+[data-view="country"] .prov { cursor: pointer; }
+
+/* 1. 全国视图：各省采用柔和六色舆图色板微差区分，隐去省内细碎接缝，突出清晰省界 */
+[data-view="country"] .prov[data-tone="0"] .unit { fill: var(--tone-0); stroke: var(--tone-0); }
+[data-view="country"] .prov[data-tone="1"] .unit { fill: var(--tone-1); stroke: var(--tone-1); }
+[data-view="country"] .prov[data-tone="2"] .unit { fill: var(--tone-2); stroke: var(--tone-2); }
+[data-view="country"] .prov[data-tone="3"] .unit { fill: var(--tone-3); stroke: var(--tone-3); }
+[data-view="country"] .prov[data-tone="4"] .unit { fill: var(--tone-4); stroke: var(--tone-4); }
+[data-view="country"] .prov[data-tone="5"] .unit { fill: var(--tone-5); stroke: var(--tone-5); }
+
+/* 2. 省视图：邻省整体退后为暗暖灰底板；本省内各地级市采用六色舆图色板 + 高对比市界 */
+[data-view="province"] .prov:not(.active) .unit { fill: var(--dim-outer); stroke: var(--dim-outer); cursor: pointer; }
+[data-view="province"] .prov.active .unit { cursor: pointer; }
+[data-view="province"] .prov.active .city[data-tone="0"] .unit { fill: var(--tone-0); stroke: var(--tone-0); }
+[data-view="province"] .prov.active .city[data-tone="1"] .unit { fill: var(--tone-1); stroke: var(--tone-1); }
+[data-view="province"] .prov.active .city[data-tone="2"] .unit { fill: var(--tone-2); stroke: var(--tone-2); }
+[data-view="province"] .prov.active .city[data-tone="3"] .unit { fill: var(--tone-3); stroke: var(--tone-3); }
+[data-view="province"] .prov.active .city[data-tone="4"] .unit { fill: var(--tone-4); stroke: var(--tone-4); }
+[data-view="province"] .prov.active .city[data-tone="5"] .unit { fill: var(--tone-5); stroke: var(--tone-5); }
+
+/* 3. 市视图：外省深灰、同省邻市中灰；当前市内各区县采用六色舆图色板 + 高对比县界 */
+[data-view="city"] .prov:not(.active) .unit { fill: var(--dim-outer); stroke: var(--dim-outer); cursor: pointer; }
+[data-view="city"] .prov.active .city:not(.active) .unit { fill: var(--dim); stroke: var(--dim); cursor: pointer; }
+[data-view="city"] .city.active .unit { cursor: pointer; stroke-width: 1.4px; stroke: var(--line-city-active); }
+[data-view="city"] .city.active .unit[data-tone="0"] { fill: var(--tone-0); }
+[data-view="city"] .city.active .unit[data-tone="1"] { fill: var(--tone-1); }
+[data-view="city"] .city.active .unit[data-tone="2"] { fill: var(--tone-2); }
+[data-view="city"] .city.active .unit[data-tone="3"] { fill: var(--tone-3); }
+[data-view="city"] .city.active .unit[data-tone="4"] { fill: var(--tone-4); }
+[data-view="city"] .city.active .unit[data-tone="5"] { fill: var(--tone-5); }
+
+/* 4. 区县（乡镇/街道）视图：外省、邻市、邻县逐级淡化；当前区县内各乡镇采用六色舆图色板 + 高对比镇界 */
+[data-view="county"] .prov:not(.active) .unit { fill: var(--dim-outer); stroke: var(--dim-outer); cursor: pointer; }
+[data-view="county"] .prov.active .city:not(.active) .unit { fill: var(--dim); stroke: var(--dim); cursor: pointer; }
+[data-view="county"] .city.active .unit:not(.active-county) { fill: var(--dim-inner); stroke: var(--dim-line); stroke-width: 1px; cursor: pointer; }
+[data-view="county"] .city.active .unit.active-county { fill: var(--land); stroke: var(--line-province); stroke-width: 1.5px; }
+
+.towns-layer { display: none; }
+[data-view="county"] .towns-layer { display: inline; }
+.towns-layer .town {
+  fill: var(--land);
+  stroke: var(--line-city-active);
+  stroke-width: 1.4px;
+  cursor: pointer;
+  transition: fill .12s;
+}
+.towns-layer .town[data-tone="0"] { fill: var(--tone-0); }
+.towns-layer .town[data-tone="1"] { fill: var(--tone-1); }
+.towns-layer .town[data-tone="2"] { fill: var(--tone-2); }
+.towns-layer .town[data-tone="3"] { fill: var(--tone-3); }
+.towns-layer .town[data-tone="4"] { fill: var(--tone-4); }
+.towns-layer .town[data-tone="5"] { fill: var(--tone-5); }
+
+/* 选中固定的区县或乡镇着色 */
+.prov .unit.selected,
+.towns-layer .town.selected {
+  fill: var(--sel-fill) !important;
+  stroke: var(--sel-border) !important;
+}
+
+/* 鼠标悬停当前板块内区域：高饱和亮金着色（最高视觉重点） */
+.prov.hovered .unit,
+.city.hovered .unit,
+.prov .unit.hovered,
+.towns-layer .town.hovered {
+  fill: var(--hl-fill) !important;
+}
+/* 鼠标悬停外部邻近板块：柔和暖黄提示 */
+.prov.hovered-neighbor .unit,
+.city.hovered-neighbor .unit,
+.prov .unit.hovered-neighbor {
+  fill: var(--hl-fill-neighbor) !important;
+}
+/* 悬停整省或整市时，内部区县接缝与填充同色，呈现为完整干净的色块 */
+[data-view="country"] .prov.hovered .unit,
+[data-view="province"] .prov.hovered .unit,
+[data-view="province"] .city.hovered .unit,
+[data-view="city"] .prov.hovered .unit,
+[data-view="city"] .city.hovered .unit,
+[data-view="county"] .prov.hovered .unit,
+[data-view="county"] .city.hovered .unit {
+  stroke: var(--hl-fill) !important;
+}
+[data-view="province"] .prov.hovered-neighbor .unit,
+[data-view="city"] .prov.hovered-neighbor .unit,
+[data-view="city"] .city.hovered-neighbor .unit,
+[data-view="county"] .prov.hovered-neighbor .unit,
+[data-view="county"] .city.hovered-neighbor .unit {
+  stroke: var(--hl-fill-neighbor) !important;
+}
+
+/* ---------- 板块层级轮廓与悬停焦点描边系统 ---------- */
+.active-parent-layer,
+.active-sublines,
+.active-layer,
+.select-layer,
+.hover-layer {
+  pointer-events: none;
+}
+
+/* 上级参考外框（如市视图下的所属省轮廓、区县视图下的所属市轮廓） */
+.active-parent-outline {
+  fill: none;
+  stroke: #575248;
+  stroke-width: 1.8px;
+  stroke-dasharray: 5 3;
+}
+
+/* 当前激活板块内部的子区域分界线（白底衬边 + 深墨实线，使省内各市、市内各县、县内各镇边缘极清晰） */
+.subline-casing {
+  fill: none;
+  stroke: rgba(255, 255, 255, .92);
+  stroke-width: 4px;
+}
+.subline-stroke {
+  fill: none;
+  stroke: #1e293b;
+  stroke-width: 1.95px;
+}
+
+/* 当前进入的省/市/区县板块整体外围大轮廓（外投影 + 亮白护圈 + 粗墨外框，与其他板块彻底区分开） */
+.active-shadow {
+  fill: none;
+  stroke: rgba(15, 23, 42, .24);
+  stroke-width: 11px;
+}
+.active-halo {
+  fill: none;
+  stroke: rgba(255, 255, 255, .96);
+  stroke-width: 6.2px;
+}
+.active-outline {
+  fill: none;
+  stroke: #0f172a;
+  stroke-width: 3.4px;
+}
+
+/* 选中固定外框 */
+.select-halo {
+  fill: none;
+  stroke: var(--hl-halo);
+  stroke-width: 6px;
+}
+.select-outline {
+  fill: none;
+  stroke: var(--sel-border);
+  stroke-width: 3px;
+}
+
+/* 鼠标悬停焦点外框（三层高亮环：红晕外发光 + 纯白隔离圈 + 鲜红粗描边，视觉重点最突出） */
+.hover-glow {
+  fill: none;
+  stroke: var(--hl-glow);
+  stroke-width: 12px;
+}
+.hover-halo {
+  fill: none;
+  stroke: var(--hl-halo);
+  stroke-width: 7.4px;
+}
+.hover-outline {
+  fill: none;
+  stroke: var(--hl-border);
+  stroke-width: 3.8px;
+}
+/* 悬停外部邻居板块时采用次级琥珀橙描边，不抢夺当前主板块的视觉重心 */
+.hover-layer[data-neighbor="1"] .hover-glow {
+  stroke: rgba(245, 158, 11, .22);
+  stroke-width: 9px;
+}
+.hover-layer[data-neighbor="1"] .hover-halo {
+  stroke-width: 5.5px;
+}
+.hover-layer[data-neighbor="1"] .hover-outline {
+  stroke: #ea580c;
+  stroke-width: 2.6px;
+}
+
+/* 全局基础边界线：在全国视图下清晰展示省界；进入子层级后退后为柔和背景参考线 */
+.line-county { fill: none; stroke: none; pointer-events: none; }
+.line-city { fill: none; stroke: #b5ad9e; stroke-width: .95px; pointer-events: none; }
+[data-view="country"] .line-city,
+[data-view="province"] .line-city { display: none; }
+.line-province { fill: none; stroke: var(--line-province); stroke-width: 1.6px; pointer-events: none; }
+[data-view="province"] .line-province,
+[data-view="city"] .line-province,
+[data-view="county"] .line-province {
+  stroke: #9c9484;
+  stroke-width: 1.15px;
+}
+.line-country { fill: none; stroke: var(--ink); stroke-width: 2.2px; pointer-events: none; }
+
+/* ---------- 真实底图模式与全局区县网格 ---------- */
+[data-basemap] .sea { fill: transparent; }
+[data-basemap] .map-shadow { display: none; }
+[data-basemap] .prov .unit { fill: rgba(255, 255, 255, .01) !important; stroke: transparent !important; }
+[data-basemap] .towns-layer .town { fill: rgba(255, 255, 255, .01) !important; stroke: transparent !important; }
+
+/* 真实底图下非当前省/市/区县的半透明遮罩（明显压暗周边非当前板块，突出当前区域） */
+[data-basemap][data-view="province"] .prov:not(.active) .unit,
+[data-basemap][data-view="city"] .prov:not(.active) .unit,
+[data-basemap][data-view="city"] .prov.active .city:not(.active) .unit,
+[data-basemap][data-view="county"] .prov:not(.active) .unit,
+[data-basemap][data-view="county"] .prov.active .city:not(.active) .unit,
+[data-basemap][data-view="county"] .city.active .unit:not(.active-county) {
+  fill: rgba(232, 226, 214, .68) !important;
+  stroke: transparent !important;
+}
+
+/* 真实底图下悬停与选中：高辨识度半透明着色，同时透出底层道路与地貌 */
+[data-basemap] .prov.hovered .unit,
+[data-basemap] .city.hovered .unit,
+[data-basemap] .prov .unit.hovered,
+[data-basemap] .towns-layer .town.hovered {
+  fill: rgba(250, 204, 21, .48) !important;
+  stroke: rgba(250, 204, 21, .38) !important;
+}
+[data-basemap] .prov.hovered-neighbor .unit,
+[data-basemap] .city.hovered-neighbor .unit,
+[data-basemap] .prov .unit.hovered-neighbor {
+  fill: rgba(253, 224, 71, .32) !important;
+}
+[data-basemap] .prov .unit.selected,
+[data-basemap] .towns-layer .town.selected {
+  fill: rgba(56, 189, 248, .48) !important;
+  stroke: var(--sel-border) !important;
+}
+
+/* 暗色卫星底图：边界线提亮，遮罩改为深色半透明 */
+[data-basemap-dark] #map > .line-country { stroke: #fff; stroke-width: 2.2px; }
+[data-basemap-dark] #map > .line-province { stroke: rgba(255, 255, 255, .65); stroke-width: 1.25px; }
+[data-basemap-dark][data-view="country"] #map > .line-province { stroke: rgba(255, 255, 255, .92); stroke-width: 1.6px; }
+[data-basemap-dark] #map > .line-city { stroke: rgba(255, 255, 255, .45); stroke-width: 1px; }
+[data-basemap-dark] .subline-casing { stroke: rgba(10, 16, 26, .82); }
+[data-basemap-dark] .subline-stroke { stroke: rgba(255, 255, 255, .92); }
+[data-basemap-dark] .active-halo { stroke: rgba(10, 16, 26, .9); }
+[data-basemap-dark] .active-outline { stroke: #38bdf8; }
+[data-basemap-dark] .active-parent-outline { stroke: rgba(255, 255, 255, .65); }
+[data-basemap-dark][data-view="province"] .prov:not(.active) .unit,
+[data-basemap-dark][data-view="city"] .prov:not(.active) .unit,
+[data-basemap-dark][data-view="city"] .prov.active .city:not(.active) .unit,
+[data-basemap-dark][data-view="county"] .prov:not(.active) .unit,
+[data-basemap-dark][data-view="county"] .prov.active .city:not(.active) .unit,
+[data-basemap-dark][data-view="county"] .city.active .unit:not(.active-county) {
+  fill: rgba(8, 13, 23, .62) !important;
+  stroke: transparent !important;
+}
+
+/* 全局区县网格开关（手动开启时才显示 2875 个区县网格） */
+[data-county-grid] #map .prov .unit { stroke: rgba(110, 102, 88, .48) !important; stroke-width: .55px; }
+[data-county-grid][data-basemap-dark] #map .prov .unit { stroke: rgba(255, 255, 255, .45) !important; }
+[data-county-grid] #map > .line-city { display: block; }
+
+/* 行政区划标签开关 */
+[data-hide-labels] .prov-labels,
+[data-hide-labels] .city-labels,
+[data-hide-labels] .labels,
+[data-hide-labels] .town-labels { display: none !important; }
+
+/* 南海诸岛插图 */
+.inset { transition: opacity .4s; pointer-events: none; }
+.inset-bg { fill: var(--paper); }
+.inset-frame { fill: none; stroke: var(--ink); stroke-width: 2px; }
+.inset-title { font-size: 12px; text-anchor: end; fill: var(--muted); }
+.inset .unit { stroke-width: .3px; }
+.inset .line-province { stroke-width: .6px; }
+.inset .line-country { stroke-width: 1px; }
+.jd { fill: var(--ink); stroke: var(--ink); stroke-width: 1.6px; stroke-linecap: round; }
+[data-view="province"] .inset, [data-view="city"] .inset, [data-view="county"] .inset { opacity: 0; }
+
+/* 地级市名（省视图）、区县名（市视图）与乡镇/街道名（区县视图） */
+.city-labels g, .labels g, .town-labels g { visibility: hidden; }
+[data-view="province"] .city-labels g.active,
+[data-view="city"] .labels g.active,
+[data-view="county"] .town-labels g.active { visibility: visible; }
+.city-labels line, .labels line, .town-labels line { stroke: var(--ink); stroke-width: 1.2px; vector-effect: non-scaling-stroke; }
+.city-labels circle, .labels circle, .town-labels circle { fill: #fff; stroke: var(--ink); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.city-labels .leaders, .labels .leaders, .town-labels .leaders { opacity: 0; transition: opacity .3s; }
+[data-view="province"] .city-labels .active .leaders,
+[data-view="city"] .labels .active .leaders,
+[data-view="county"] .town-labels .active .leaders { opacity: 1; transition-delay: .35s; }
+.city-labels text, .labels text, .town-labels text {
+  font-size: calc(var(--label-size, 10px) * var(--ls, 1));
+  text-anchor: middle; dominant-baseline: central;
+  fill: var(--ink);
+  paint-order: stroke; stroke: rgba(255, 255, 255, .92); stroke-width: .3em; stroke-linejoin: round;
+  pointer-events: none;
+  opacity: 0; transition: opacity .3s;
+}
+[data-view="province"] .city-labels .active text,
+[data-view="city"] .labels .active text,
+[data-view="county"] .town-labels .active text { opacity: 1; transition-delay: .35s; }
+
+/* 省名：全国视图默认显示清晰的矢量省份简称；未放大时隐藏极小拥挤区域（港澳、津、沪），放大后全部显示 */
+.prov-labels { visibility: hidden; }
+[data-view="country"] .prov-labels { visibility: visible; }
+.prov-labels text {
+  font-size: var(--prov-label-size, 12.5px);
+  text-anchor: middle; dominant-baseline: central;
+  fill: var(--ink);
+  paint-order: stroke; stroke: rgba(255, 255, 255, .92); stroke-width: .32em; stroke-linejoin: round;
+  pointer-events: none;
+  opacity: 0; transition: opacity .25s;
+}
+[data-view="country"] .prov-labels text { opacity: 1; }
+[data-view="country"] #map:not(.zoomed) .prov-labels text[data-province="810000"],
+[data-view="country"] #map:not(.zoomed) .prov-labels text[data-province="820000"],
+[data-view="country"] #map:not(.zoomed) .prov-labels text[data-province="120000"],
+[data-view="country"] #map:not(.zoomed) .prov-labels text[data-province="310000"] {
+  opacity: 0;
+}
+
+/* 暗色卫星底图下文字反白加深色描边，保证清晰易读 */
+[data-basemap-dark] .prov-labels text,
+[data-basemap-dark] .city-labels text,
+[data-basemap-dark] .labels text,
+[data-basemap-dark] .town-labels text {
+  fill: #fff;
+  stroke: rgba(10, 16, 26, .9);
+}
+[data-basemap-dark] .city-labels line,
+[data-basemap-dark] .labels line,
+[data-basemap-dark] .town-labels line { stroke: rgba(255, 255, 255, .85); }
+[data-basemap-dark] .city-labels circle,
+[data-basemap-dark] .labels circle,
+[data-basemap-dark] .town-labels circle { fill: #0f172a; stroke: #fff; }
+
+/* ============ 悬停辅助 ============ */
+@media (hover: hover) {
+  [data-view="province"] .crumb-root:hover,
+  [data-view="city"] .crumb-root:hover,
+  [data-view="county"] .crumb-root:hover,
+  #crumb:has(#crumb-city:not([hidden])) #crumb-province .crumb-leaf:hover,
+  #crumb:has(#crumb-county:not([hidden])) #crumb-city .crumb-leaf:hover { color: var(--ink); text-decoration: underline; }
+  [data-basemap-dark][data-view="province"] .crumb-root:hover,
+  [data-basemap-dark][data-view="city"] .crumb-root:hover,
+  [data-basemap-dark][data-view="county"] .crumb-root:hover,
+  [data-basemap-dark] #crumb:has(#crumb-city:not([hidden])) #crumb-province .crumb-leaf:hover,
+  [data-basemap-dark] #crumb:has(#crumb-county:not([hidden])) #crumb-city .crumb-leaf:hover { color: #fff; }
+  .layer-card:not(.active):hover, .layer-toggle:not(.active):hover { background: var(--hover); }
+  .loc-grid button:hover, .loc-list button:hover, .loc-head button:hover { background: var(--hl-fill); }
+}
+
+/* ============ 响应式 ============ */
+@media (max-width: 700px) {
+  :root { --gap: 8px; }
+
+  #topbar { gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .crumb-root { font-size: 20px; }
+  [data-view="province"] .crumb-root,
+  [data-view="city"] .crumb-root,
+  [data-view="county"] .crumb-root,
+  #crumb:has(#crumb-city:not([hidden])) #crumb-province .crumb-leaf,
+  #crumb:has(#crumb-county:not([hidden])) #crumb-city .crumb-leaf { font-size: 15px; }
+  #crumb-province, #crumb-city, #crumb-county { font-size: 18px; }
+  .search { flex: none; width: 38px; padding: 0 8px; margin-left: auto; cursor: pointer; }
+  .search input { width: 0; }
+  #topbar.searching #crumb, #topbar.searching #layer-btn { display: none; }
+  #topbar.searching .search { flex: 1; width: auto; }
+  #layer-btn { margin-left: 0; flex: none; justify-content: center; width: 38px; padding: 0; }
+  #layer-btn span { display: none; }
+
+  #panel {
+    top: auto; left: var(--gap); right: var(--gap); bottom: max(var(--gap), env(safe-area-inset-bottom));
+    width: auto; max-height: 44vh; max-height: 44dvh;
+  }
+  #region-panel { padding: 10px 12px; gap: 8px; }
+  .info-title { font-size: 18px; }
+  .info-foot { display: none; }
+
+  #locator { left: 8px !important; right: 8px; width: auto; max-height: 72vh; }
+  #layer-menu { right: 8px; left: 8px; width: auto; }
+
+  .panel-handle {
+    display: flex; justify-content: center; align-items: center; flex: none;
+    height: 22px; margin-bottom: -8px; border: 0; background: none; touch-action: none; cursor: grab;
+  }
+  .panel-handle span { width: 40px; height: 5px; border-radius: 3px; background: var(--divider); }
+  #panel.collapsed .info-grid, #panel.collapsed .sub-head, #panel.collapsed #city-list { display: none; }
+  #sansha-card { width: 112px; }
+}
+
+@media (pointer: coarse) {
+  .search input { font-size: 16px; }
+  #city-list button { padding: 5px 10px; }
+  .loc-grid button { padding: 7px 10px; }
+  .loc-head button { padding: 6px 10px; }
+  .loc-list button { padding: 10px 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .unit, .towns-layer .town, .city-labels text, .labels text, .town-labels text, .prov-labels text, .inset { transition: none; }
+}

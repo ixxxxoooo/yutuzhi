@@ -1,0 +1,26 @@
+第三方素材与数据声明 / Third-Party Materials & Data Attribution
+
+The MIT License in LICENSE applies to the source code of this project. The following
+third-party materials and datasets included in or referenced by this repository are
+distributed under their respective terms:
+
+1. Font Subset (src/fonts/cityex-sans.woff2):
+   - Derived from Smiley Sans (得意黑) by atelierAnchor, renamed to "CityEx Sans" as
+     required by its Reserved Font Name clause.
+   - Licensed under the SIL Open Font License 1.1; see public/fonts/OFL.txt.
+
+2. Administrative Boundary Vectors (src/map-data.json, src/map-fine.json):
+   - Provincial, prefectural, and county-level boundary geometries derived from
+     Alibaba DataV GeoAtlas (https://datav.aliyun.com/portal/school/atlas/area_selector),
+     projected with D3 Albers Equal-Area Conic projection (+80,000x scale) and
+     topologically cleaned via mapshaper.
+
+3. Township / Subdistrict Administrative Data & Coordinates (src/towns-data.json):
+   - 38,717 township-level administrative divisions (街道/镇/乡/苏木) compiled from
+     National Bureau of Statistics & Ministry of Civil Affairs public administrative
+     division catalogs (AreaCity-JsSpider-StatsGov, CC-BY-4.0 / MIT) and calibrated
+     with GCJ-02 township seat coordinates.
+
+4. Online Basemap Tiles (loaded on demand in client browser):
+   - AutoNavi / AMap (高德地图), Esri World Imagery / World Shaded Relief, and
+     OpenTopoMap, subject to each tile provider's terms of service.

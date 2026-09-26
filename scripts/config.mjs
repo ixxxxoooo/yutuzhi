@@ -1,0 +1,146 @@
+// 构建脚本共用的配置（县级制霸版）
+import { pinyin, customPinyin } from 'pinyin-pro';
+
+// 仅台湾省作为单个单位标记（DataV 无台湾下辖区县边界）；其余省、直辖市、港澳均细分到区县
+export const SINGLE_UNIT = ['710000'];
+
+// 三沙市下辖西沙区、南沙区：岛礁分散在南海，不参与海南省视图主图缩放范围计算，在南海诸岛插图与三沙卡片中显示
+export const SANSHA_CODES = ['460301', '460302'];
+export const isSansha = code => SANSHA_CODES.includes(code);
+
+// 地名多音字正音
+customPinyin({
+  重庆: 'chong qing',
+  长治: 'chang zhi',
+  长沙: 'chang sha',
+  长春: 'chang chun',
+  长子: 'zhang zi',
+  长垣: 'chang yuan',
+  长汀: 'chang ting',
+  长泰: 'chang tai',
+  长乐: 'chang le',
+  长兴: 'chang xing',
+  长丰: 'chang feng',
+  长阳: 'chang yang',
+  长寿: 'chang shou',
+  长宁: 'chang ning',
+  长顺: 'chang shun',
+  长武: 'chang wu',
+  长岭: 'chang ling',
+  长白: 'chang bai',
+  长海: 'chang hai',
+  长清: 'chang qing',
+  长岛: 'chang dao',
+  长安: 'chang an',
+  长葛: 'chang ge',
+  长洲: 'chang zhou',
+  厦门: 'xia men',
+  六安: 'lu an',
+  六合: 'lu he',
+  蚌埠: 'beng bu',
+  丽水: 'li shui',
+  台州: 'tai zhou',
+  番禺: 'pan yu',
+  涪陵: 'fu ling',
+  洪洞: 'hong tong',
+  繁峙: 'fan shi',
+  蔚县: 'yu xian',
+  单县: 'shan xian',
+  铅山: 'yan shan',
+  乐亭: 'lao ting',
+  浚县: 'xun xian',
+  泌阳: 'bi yang',
+  渑池: 'mian chi',
+  获嘉: 'huo jia',
+  监利: 'jian li',
+  耒阳: 'lei yang',
+  犍为: 'qian wei',
+  筠连: 'jun lian',
+  什邡: 'shi fang',
+  宕昌: 'tan chang',
+  涡阳: 'guo yang',
+  枞阳: 'zong yang',
+  歙县: 'she xian',
+  黟县: 'yi xian',
+  盱眙: 'xu yi',
+  句容: 'ju rong',
+  邗江: 'han jiang',
+  大城: 'da cheng',
+  大名: 'da ming',
+  乐陵: 'lao ling',
+  莘县: 'shen xian',
+  冠县: 'guan xian',
+  莒县: 'ju xian',
+  临猗: 'lin yi',
+  万荣: 'wan rong',
+  隰县: 'xi xian',
+  蒲县: 'pu xian',
+  吉县: 'ji xian',
+  古县: 'gu xian',
+});
+
+// 自动简称规则处理不好的名字
+export const SHORT_NAME = {
+  '110000': '北京', '120000': '天津', '310000': '上海', '500000': '重庆',
+  '710000': '台湾', '810000': '香港', '820000': '澳门',
+  '150000': '内蒙古', '450000': '广西', '540000': '西藏', '640000': '宁夏', '650000': '新疆',
+  '522300': '黔西南', '522600': '黔东南', '532800': '西双版纳',
+  '632500': '海南州', '652700': '博州', '652800': '巴州', '653000': '克州',
+  '429021': '神农架',
+  '632825': '大柴旦',
+  '211324': '喀左',
+  '220721': '前郭',
+  '230624': '杜尔伯特',
+  '150722': '莫旗',
+  '150723': '鄂伦春',
+  '150724': '鄂温克',
+  '150223': '达茂旗',
+  '150521': '科左中旗',
+  '150522': '科左后旗',
+  '152221': '科右前旗',
+  '152222': '科右中旗',
+  '150926': '察右前旗',
+  '150927': '察右中旗',
+  '150928': '察右后旗',
+  '150121': '土左旗',
+  '150221': '土右旗',
+  '150726': '新左旗',
+  '150727': '新右旗',
+  '152525': '东乌旗',
+  '152526': '西乌旗',
+  '152921': '阿左旗',
+  '152922': '阿右旗',
+  '622926': '东乡',
+  '622927': '积石山',
+  '620525': '张家川',
+  '620924': '阿克塞',
+  '650521': '巴里坤',
+  '653131': '塔县',
+  '654022': '察布查尔',
+  '654226': '和布克赛尔',
+  '130804': '鹰手营子',
+  '150206': '白云鄂博',
+  '230208': '梅里斯',
+  '410104': '管城',
+  '410203': '顺河',
+  '410304': '瀍河',
+  '130107': '井陉矿区',
+  '622901': '临夏市', '622921': '临夏县',
+  '653201': '和田市', '653221': '和田县',
+  '654002': '伊宁市', '654021': '伊宁县',
+  '820001': '花地玛', '820002': '花王', '820003': '望德', '820004': '大堂',
+  '820005': '风顺', '820006': '嘉模', '820007': '路凼', '820008': '圣方济各',
+};
+
+export const shortName = (code, name) => {
+  if (SHORT_NAME[code]) return SHORT_NAME[code];
+  if (name.length <= 2) return name;
+  if (/自治[州县旗]$/.test(name)) return name.slice(0, 2);
+  const s = name.replace(/(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|省|市|地区|盟|特区|矿区|县|区|旗)$/, '');
+  return s.length >= 2 ? s : name;
+};
+
+export const toPinyin = text => ({
+  py: pinyin(text, { toneType: 'none', v: true, nonZh: 'removed' }).replace(/\s+/g, ''),
+  pi: pinyin(text, { pattern: 'first', toneType: 'none', v: true, nonZh: 'removed' }).replace(/\s+/g, ''),
+});

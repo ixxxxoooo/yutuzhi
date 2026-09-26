@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>YuTuZhi 舆图志 · 中国行政区划地图</title>
+  <meta name="description" content="YuTuZhi（舆图志）：中国省、市、区县、乡镇四级行政区划交互地图，支持悬停快速查看区域总量、面积、坐标、区划代码与下辖行政区信息">
+  <meta name="theme-color" content="#f3efe6">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='4' width='26' height='24' rx='6' fill='%23FACC15' stroke='%23222' stroke-width='3'/%3E%3Cpath d='M9 20l5-8 4 5 3-4 3 7z' fill='%23fff' stroke='%23222' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script type="module" src="/src/main.js"></script>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <!-- 顶栏：面包屑 · 搜索 · 图层 -->
+  <header id="topbar">
+    <nav id="crumb" aria-label="当前位置">
+      <button id="crumb-root" class="crumb-root">全国</button>
+      <span id="crumb-province" hidden><span class="sep" aria-hidden="true">›</span><button class="crumb-leaf" title="复位视图"></button></span>
+      <span id="crumb-city" hidden><span class="sep" aria-hidden="true">›</span><button class="crumb-leaf" title="复位视图"></button></span>
+      <span id="crumb-county" hidden><span class="sep" aria-hidden="true">›</span><button class="crumb-leaf" title="复位视图"></button></span>
+    </nav>
+    <div id="search" class="search" aria-expanded="false" aria-controls="locator">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+      <input type="search" placeholder="搜索省、市、区县、乡镇街道、拼音或代码" aria-label="搜索省、市、区县或乡镇" autocomplete="off" enterkeyhint="go">
+    </div>
+    <button id="layer-btn" class="btn" type="button" aria-expanded="false" aria-controls="layer-menu" title="切换地图底图与叠加图层">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 8l10 5 10-5-10-5zM2 12.5l10 5 10-5M2 17l10 5 10-5"/></svg>
+      <span id="layer-btn-label">图层</span>
+    </button>
+  </header>
+
+  <div id="locator" hidden>
+    <div class="locator-body"></div>
+  </div>
+
+  <div id="layer-menu" role="dialog" aria-label="地图图层设置" hidden></div>
+
+  <main id="stage">
+    <canvas id="basemap" hidden aria-hidden="true"></canvas>
+    <svg id="map" xmlns="http://www.w3.org/2000/svg"></svg>
+    <!-- 海南省/三沙市视图：三沙市（西沙区、南沙区）远在南海，用小卡片展示 -->
+    <div id="sansha-card" hidden aria-label="三沙市（西沙区、南沙区）">
+      <svg aria-hidden="true"></svg>
+      <div class="sansha-btns">
+        <button type="button" class="name" data-code="460301">西沙区</button>
+        <button type="button" class="name" data-code="460302">南沙区</button>
+      </div>
+      <span class="caption">三沙市 · 南海诸岛</span>
+    </div>
+  </main>
+
+  <!-- 鼠标悬停实时浮窗：跟随光标展示当前悬停省/市/区县的统计总量与详细信息 -->
+  <div id="hover-card" hidden aria-hidden="true"></div>
+
+  <!-- 侧栏：当前区域统计信息 + 下辖行政区快速导航列表 -->
+  <aside id="panel">
+    <button id="panel-toggle" class="panel-handle" type="button" aria-expanded="true" aria-controls="panel" aria-label="收起面板"><span></span></button>
+    <section id="region-panel">
+      <div id="info-card"></div>
+      <div class="sub-head">
+        <span id="sub-title">省级行政区</span>
+        <small id="sub-hint">悬停高亮 · 点击进入</small>
+      </div>
+      <div id="city-list"></div>
+    </section>
+  </aside>
+
+  <noscript><p class="noscript">需要开启 JavaScript 才能使用地图。</p></noscript>
+</body>
+</html>
