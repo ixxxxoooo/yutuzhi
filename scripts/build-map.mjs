@@ -2,7 +2,7 @@
 // 拓扑化简化（mapshaper）→ Albers 投影 → SVG path 字符串 + 标签点 + 省/市范围 + 南海诸岛插图
 import { readFile, writeFile } from 'node:fs/promises';
 import mapshaper from 'mapshaper';
-import { geoConicEqualArea } from 'd3-geo';
+import { geoConicEqualArea, geoArea, geoCentroid } from 'd3-geo';
 import * as topojson from 'topojson-client';
 import polylabel from 'polylabel';
 import { SINGLE_UNIT, isSansha, shortName, toPinyin } from './config.mjs';
@@ -10,7 +10,9 @@ import { SINGLE_UNIT, isSansha, shortName, toPinyin } from './config.mjs';
 const RAW = new URL('../data/raw/', import.meta.url);
 const OUT = new URL('../src/map-data.json', import.meta.url);
 const OUT_FINE = new URL('../src/map-fine.json', import.meta.url);
+const TOWNS_FILE = new URL('../src/towns-data.json', import.meta.url);
 const readJSON = async name => JSON.parse(await readFile(new URL(name, RAW), 'utf8'));
+const townsData = JSON.parse(await readFile(TOWNS_FILE, 'utf8'));
 
 const WIDTH = 1000;          // 全国视图 viewBox 宽度
 const PAD = 16;
@@ -25,7 +27,7 @@ const ALWAYS_KEEP = [[123.3, 25.6, 124.7, 26.0]];
 const INSET_LONLAT = [[106.5, 3], [122.5, 24.5]];
 const INSET_WIDTH = 150;
 // 直辖市与港澳：不设地级市层，点击省份直接进入区县标记视图
-const DIRECT_PROV = new Set(['110000', '120000', '310000', '500000', '710000', '810000', '820000']);
+const DIRECT_PROV = new Set(['110000', '120000', '310000', '500000', '810000', '820000']);
 const SANSHA_CITY = '460300';
 
 // ---------- 1. 汇总省份、地级市与区县标记单位 ----------
@@ -156,7 +158,9 @@ const insetRaw = boundsOf([insetFrame], raw);
 const INSET_HEIGHT = INSET_WIDTH * (insetRaw[3] - insetRaw[1]) / (insetRaw[2] - insetRaw[0]);
 const twMain = {
   type: 'MultiPolygon',
-  coordinates: polysOf(fc.features.find(f => f.properties.code === '710000').geometry)
+  coordinates: fc.features
+    .filter(f => f.properties.province === '710000')
+    .flatMap(f => polysOf(f.geometry))
     .filter(p => p[0].some(([, la]) => la > 21.5)),
 };
 const taiwanBottom = boundsOf([twMain], main)[3];
@@ -275,24 +279,10 @@ const projPolys = (geom, proj) => (geom.type === 'Polygon' ? [geom.coordinates] 
   .map(poly => poly.map(ring => ring.map(proj)));
 
 const fineScaleOf = provCode => (provCode === '810000' || provCode === '820000' ? 400
-  : DIRECT_PROV.has(provCode) ? 100 : 20);
+  : DIRECT_PROV.has(provCode) || provCode === '710000' ? 100 : 20);
 
-const coarseByCode = new Map(levels.coarse.fc.features.map(f => [f.properties.code, f]));
-const unitsOut = fc.features.map(f => {
-  const { code, name, province, city } = f.properties;
-  const polys = projPolys(f.geometry, main);
-  const largest = polys.reduce((a, b) => (ringArea(b[0]) > ringArea(a[0]) ? b : a));
-  const label = polylabel(largest, 0.05).map(r2);
-  const bbox = boundsOf([f.geometry], main).map(r2);
-  const short = shortName(code, name);
-  return {
-    code, name, short, province, city,
-    ...toPinyin(short),
-    d: isSansha(code) ? '' : toD(coarseByCode.get(code).geometry, main, 10),
-    label: isSansha(code) ? null : label,
-    bbox,
-  };
-});
+const EARTH_R2 = 6371 * 6371;
+const calcAreaKm2 = geom => Math.max(1, Math.round(geoArea(geom) * EARTH_R2));
 
 // 省与地级市范围（缩放目标）与标签标注点
 const mainParts = geom => {
@@ -301,6 +291,30 @@ const mainParts = geom => {
   const max = Math.max(...areas);
   return { type: 'MultiPolygon', coordinates: polys.filter((_, i) => areas[i] >= max * 0.01) };
 };
+
+const coarseByCode = new Map(levels.coarse.fc.features.map(f => [f.properties.code, f]));
+const unitsOut = fc.features.map(f => {
+  const { code, name, province, city } = f.properties;
+  const polys = projPolys(f.geometry, main);
+  const largest = polys.reduce((a, b) => (ringArea(b[0]) > ringArea(a[0]) ? b : a));
+  const label = polylabel(largest, 0.05).map(r2);
+  const bbox = boundsOf([mainParts(f.geometry)], main).map(r2);
+  const short = shortName(code, name);
+  const area = calcAreaKm2(f.geometry);
+  const center = geoCentroid(f.geometry).map(r2);
+  const towns = (townsData[code] ?? []).length;
+  return {
+    code, name, short, province, city,
+    ...toPinyin(short),
+    d: isSansha(code) ? '' : toD(coarseByCode.get(code).geometry, main, 10),
+    label: isSansha(code) ? null : label,
+    bbox,
+    area,
+    center,
+    towns,
+  };
+});
+
 for (const p of provinces) {
   const geoms = fc.features.filter(f => f.properties.province === p.code && !isSansha(f.properties.code)).map(f => mainParts(f.geometry));
   p.bbox = boundsOf(geoms, main).map(r2);
@@ -308,11 +322,19 @@ for (const p of provinces) {
   const polys = projPolys(merged, main);
   const largest = polys.reduce((a, b) => (ringArea(b[0]) > ringArea(a[0]) ? b : a));
   p.label = polylabel(largest, 0.2).map(r1);
+  const pUnits = unitsOut.filter(u => u.province === p.code);
+  p.area = pUnits.reduce((s, u) => s + (u.area || 0), 0);
+  p.center = geoCentroid(merged).map(r2);
+  p.towns = pUnits.reduce((s, u) => s + (u.towns || 0), 0);
 }
 for (const c of cities) {
+  const cUnits = unitsOut.filter(u => u.city === c.code);
+  c.area = cUnits.reduce((s, u) => s + (u.area || 0), 0);
+  c.towns = cUnits.reduce((s, u) => s + (u.towns || 0), 0);
   if (c.code === SANSHA_CITY) {
     c.bbox = null;
     c.label = null;
+    c.center = [112.35, 16.83];
     continue;
   }
   const cGeoms = obj.geometries.filter(g => g.properties.city === c.code && !isSansha(g.properties.code));
@@ -322,6 +344,7 @@ for (const c of cities) {
   const polys = projPolys(cleaned, main);
   const largest = polys.reduce((a, b) => (ringArea(b[0]) > ringArea(a[0]) ? b : a));
   c.label = polylabel(largest, 0.1).map(r2);
+  c.center = geoCentroid(cleaned).map(r2);
 }
 
 // ---------- 5. 边界线（县界由各区县 path 自身描边绘制；市界、省界、国界单独提取）----------

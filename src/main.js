@@ -59,7 +59,7 @@ const cityTypeOf = c => {
 };
 
 const unitTypeOf = u => {
-  if (u.code === '710000') return '省级行政区';
+  if (u.province === '710000') return u.name.endsWith('市') ? '市' : '县';
   if (u.name === '神农架林区') return '林区';
   if (u.name.endsWith('自治县')) return '自治县';
   if (u.name.endsWith('自治旗')) return '自治旗';
@@ -77,6 +77,8 @@ const townTypeOf = t => {
   if (t.name.endsWith('苏木')) return '苏木';
   if (t.name.endsWith('镇')) return '镇';
   if (t.name.endsWith('乡')) return '乡';
+  if (t.name.endsWith('区')) return '市辖区';
+  if (t.name.endsWith('市')) return '县辖市';
   if (t.name.includes('开发区') || t.name.includes('园区') || t.name.includes('管理区')) return '园区/开发区';
   return '乡镇级';
 };
@@ -93,14 +95,11 @@ const formatCoord = center => {
 };
 
 const breakdownUnits = list => {
-  const counts = { 市辖区: 0, 县级市: 0, 县: 0, 自治县: 0, 旗: 0, 其他: 0 };
+  const counts = { 市辖区: 0, 市: 0, 县级市: 0, 县: 0, 自治县: 0, 旗: 0, 其他: 0 };
   for (const u of list) {
     const t = unitTypeOf(u);
-    if (t === '市辖区') counts.市辖区++;
-    else if (t === '县级市') counts.县级市++;
-    else if (t === '县') counts.县++;
-    else if (t === '自治县') counts.自治县++;
-    else if (t === '旗' || t === '自治旗') counts.旗++;
+    if (counts[t] !== undefined) counts[t]++;
+    else if (t === '自治旗') counts.旗++;
     else counts.其他++;
   }
   const parts = Object.entries(counts).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`);
@@ -108,7 +107,7 @@ const breakdownUnits = list => {
 };
 
 const breakdownTowns = list => {
-  const counts = { 街道: 0, 镇: 0, 乡: 0, 民族乡: 0, 苏木: 0, 其他: 0 };
+  const counts = { 街道: 0, 市辖区: 0, 县辖市: 0, 镇: 0, 乡: 0, 民族乡: 0, 苏木: 0, 其他: 0 };
   for (const t of list) {
     const tp = townTypeOf(t);
     if (counts[tp] !== undefined) counts[tp]++;
@@ -152,23 +151,29 @@ const getRegionData = target => {
     const pCities = citiesOf(p.code);
     const pUnits = unitsOf(p.code);
     const pct = ((p.area / TOTAL_AREA) * 100).toFixed(2);
-    const cityStat = p.single
-      ? { label: '行政建制', value: '省级行政区', note: '台湾省' }
+    const isTaiwan = p.code === '710000';
+    const isSar = SAR_SET.has(p.code);
+    const cityStat = isTaiwan
+      ? { label: '下辖市县', value: `${pUnits.length} 个`, note: breakdownUnits(pUnits) }
       : p.direct
         ? { label: '下辖区县', value: `${pUnits.length} 个`, note: breakdownUnits(pUnits) }
         : { label: '地级行政区', value: `${pCities.filter(c => !c.single).length} 个`, note: breakdownCities(pCities) };
-    const unitStat = p.single
-      ? { label: '区划代码', value: p.code, note: `简称：${p.short}` }
-      : p.direct
-        ? { label: '乡镇与街道', value: `${(p.towns || 0).toLocaleString()} 个`, note: '四级基层行政区划' }
-        : { label: '县级行政区', value: `${pUnits.length} 个`, note: breakdownUnits(pUnits) };
-    const previewNames = (p.direct ? pUnits : pCities).slice(0, 14).map(x => x.short).join(' · ')
-      + ((p.direct ? pUnits : pCities).length > 14 ? ' 等' : '');
+    const unitStat = isTaiwan
+      ? { label: '乡镇市区', value: `${(p.towns || 0).toLocaleString()} 个`, note: '170区 · 14市 · 38镇 · 136乡' }
+      : isSar
+        ? { label: '行政建制', value: '特别行政区', note: p.code === '810000' ? '香港十八区' : '澳门堂区/分区' }
+        : p.direct
+          ? { label: '乡镇与街道', value: `${(p.towns || 0).toLocaleString()} 个`, note: '四级基层行政区划' }
+          : { label: '县级行政区', value: `${pUnits.length} 个`, note: breakdownUnits(pUnits) };
+    const previewList = p.direct || isTaiwan ? pUnits : pCities;
+    const previewNames = previewList.slice(0, 14).map(x => x.short).join(' · ')
+      + (previewList.length > 14 ? ' 等' : '');
+    const subTownText = p.towns ? ` · 乡镇街道：${p.towns} 个` : '';
     return {
       title: p.name,
       badge: target.isNeighbor ? `邻省 · ${provTypeOf(p)}` : provTypeOf(p),
       code: p.code,
-      sub: `简称：${p.short} · 代码：${p.code} · 乡镇街道：${p.towns || 0} 个`,
+      sub: `简称：${p.short} · 代码：${p.code}${subTownText}`,
       stats: [
         cityStat,
         unitStat,
@@ -176,7 +181,7 @@ const getRegionData = target => {
         { label: '中心坐标', value: formatCoord(p.center), note: `拼音：${p.py}` },
       ],
       foot: previewNames ? `下辖：${previewNames}` : '',
-      actionHint: p.single ? '省级行政区' : target.isNeighbor ? '点击切换到该省份' : '点击进入查看下辖市县',
+      actionHint: target.isNeighbor ? '点击切换到该省份' : '点击进入查看下辖市县',
     };
   }
 

@@ -1,8 +1,8 @@
 // 构建脚本共用的配置（县级制霸版）
 import { pinyin, customPinyin } from 'pinyin-pro';
 
-// 仅台湾省作为单个单位标记（DataV 无台湾下辖区县边界）；其余省、直辖市、港澳均细分到区县
-export const SINGLE_UNIT = ['710000'];
+// 所有省级行政区（含台湾省、直辖市、港澳）均细分到下辖市县/区
+export const SINGLE_UNIT = [];
 
 // 三沙市下辖西沙区、南沙区：岛礁分散在南海，不参与海南省视图主图缩放范围计算，在南海诸岛插图与三沙卡片中显示
 export const SANSHA_CODES = ['460301', '460302'];
@@ -11,7 +11,9 @@ export const isSansha = code => SANSHA_CODES.includes(code);
 // 地名多音字正音
 customPinyin({
   重庆: 'chong qing',
+  三重: 'san chong',
   长治: 'chang zhi',
+  长滨: 'chang bin',
   长沙: 'chang sha',
   长春: 'chang chun',
   长子: 'zhang zi',
@@ -77,6 +79,7 @@ customPinyin({
   蒲县: 'pu xian',
   吉县: 'ji xian',
   古县: 'gu xian',
+  朴子: 'pu zi',
 });
 
 // 自动简称规则处理不好的名字
@@ -128,6 +131,8 @@ export const SHORT_NAME = {
   '622901': '临夏市', '622921': '临夏县',
   '653201': '和田市', '653221': '和田县',
   '654002': '伊宁市', '654021': '伊宁县',
+  '710800': '新竹市', '711300': '新竹县',
+  '710900': '嘉义市', '711900': '嘉义县',
   '820001': '花地玛', '820002': '花王', '820003': '望德', '820004': '大堂',
   '820005': '风顺', '820006': '嘉模', '820007': '路凼', '820008': '圣方济各',
 };
