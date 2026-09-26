@@ -143,6 +143,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .search[aria-expanded="true"] { box-shadow: 0 0 0 3px var(--hl-fill); color: var(--ink); }
 
 #topbar .btn { height: 38px; }
+#topbar .icon-btn { width: 38px; padding: 0; justify-content: center; flex: none; }
+#topbar .btn svg.fill-icon { width: 20px; height: 20px; fill: currentColor; stroke: none; }
 #layer-btn { margin-left: auto; }
 #layer-btn.layer-active, #layer-btn[aria-expanded="true"] { background: var(--hl-fill); }
 
@@ -707,6 +709,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   [data-basemap-dark] #crumb:has(#crumb-city:not([hidden])) #crumb-province .crumb-leaf:hover,
   [data-basemap-dark] #crumb:has(#crumb-county:not([hidden])) #crumb-city .crumb-leaf:hover { color: #fff; }
   .layer-card:not(.active):hover, .layer-toggle:not(.active):hover { background: var(--hover); }
+  #topbar .btn:hover { background: var(--hl-fill); }
   .loc-grid button:hover, .loc-list button:hover, .loc-head button:hover { background: var(--hl-fill); }
 }
 
@@ -724,7 +727,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   #crumb-province, #crumb-city, #crumb-county { font-size: 18px; }
   .search { flex: none; width: 38px; padding: 0 8px; margin-left: auto; cursor: pointer; }
   .search input { width: 0; }
-  #topbar.searching #crumb, #topbar.searching #layer-btn { display: none; }
+  #topbar.searching #crumb, #topbar.searching #layer-btn, #topbar.searching #github-btn { display: none; }
   #topbar.searching .search { flex: 1; width: auto; }
   #layer-btn { margin-left: 0; flex: none; justify-content: center; width: 38px; padding: 0; }
   #layer-btn span { display: none; }
