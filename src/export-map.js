@@ -357,16 +357,16 @@ export const generateMapPoster = async ({
   ctx.fillText(maxFoot, pad + 4, footY + 14);
 
   const repoText = 'https://github.com/ixxxxoooo/yutuzhi';
-  const brandText = 'YuTuZhi 舆图志  ·  ';
+  const brandText = '  ·  YuTuZhi 舆图志';
   ctx.textAlign = 'right';
-  ctx.font = `13px ui-monospace, SFMono-Regular, Menlo, ${FONT}`;
-  ctx.fillStyle = '#4b473f';
-  ctx.fillText(repoText, W - pad - 4, footY + 14);
-  const repoW = ctx.measureText(repoText).width;
-
   ctx.font = `bold 14px ${FONT}`;
   ctx.fillStyle = '#222222';
-  ctx.fillText(brandText, W - pad - 4 - repoW, footY + 14);
+  ctx.fillText(brandText, W - pad - 4, footY + 14);
+  const brandW = ctx.measureText(brandText).width;
+
+  ctx.font = `13px ui-monospace, SFMono-Regular, Menlo, ${FONT}`;
+  ctx.fillStyle = '#4b473f';
+  ctx.fillText(repoText, W - pad - 4 - brandW, footY + 14);
 
   return new Promise(resolve => {
     canvas.toBlob(blob => {
