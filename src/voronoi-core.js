@@ -152,6 +152,16 @@ export const computeTownCells = ({ pathD, entries, meta }) => {
   });
   const totalSvgArea = cellStats.reduce((s, c) => s + c.svgArea, 0) || 1;
 
+  // 距离区县政府驻地最近的乡镇/街道标为县城核心驻地
+  let capitalIdx = 0;
+  if (Array.isArray(meta.seat) && meta.seat.length === 2) {
+    let bestD = Infinity;
+    for (let i = 0; i < N; i++) {
+      const d = Math.hypot(seeds[i][0] - meta.seat[0], seeds[i][1] - meta.seat[1]);
+      if (d < bestD) { bestD = d; capitalIdx = i; }
+    }
+  }
+
   return entries.map(([code, name, short, py, pi, tLon, tLat], i) => {
     const cellRings = cells[i];
     const { svgArea, label } = cellStats[i];
@@ -170,6 +180,8 @@ export const computeTownCells = ({ pathD, entries, meta }) => {
       province: meta.province,
       d: ringsToD(cellRings),
       label,
+      seat: [Math.round(seeds[i][0] * 100) / 100, Math.round(seeds[i][1] * 100) / 100],
+      ...(i === capitalIdx ? { capital: true } : {}),
       bbox: cellRings.length ? ringsBBox(cellRings) : meta.bbox,
       area: areaKm2,
       center: [Math.round(lon * 100) / 100, Math.round(lat * 100) / 100],

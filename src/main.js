@@ -6,10 +6,11 @@ import {
   provinceView, cityView, unitView, unitsPerPixel, currentView, svgRect, provinces, clearRectCache,
   unitByCode, cityByCode, provinceByCode, getTownByCode, unitsOf, citiesOf, unitsOfCity, townsOfUnit,
   unitPath, cityPath, townPath, ensureProvinceCityLabels, ensureCityUnitLabels, ensureUnitTownLabels,
+  ensureCountryCityPoints, ensureProvinceCityPoints, ensureCityUnitPoints, ensureUnitTownPoints,
   buildSanshaCard, SANSHA_CODES, isSansha, FULL_VIEW,
 } from './map.js';
 import { getRegionData } from './region-info.js';
-import { layoutLabels, leaderEnd } from './label-layout.js';
+import { layoutLabels, leaderEnd, layoutCityPoints } from './label-layout.js';
 import { attachGestures } from './gesture.js';
 import { createLocator } from './locator.js';
 import { createBasemap, createLayerUI } from './basemap.js';
@@ -412,7 +413,116 @@ const applyGroupLabels = (g, items, pathOf, view) => {
   g.dataset.missing = missing.length;
 };
 
-// 省视图地级市名布局 / 市视图区县名布局 / 区县视图乡镇名布局
+const DIRECT_SAR = new Set(['110000', '120000', '310000', '500000', '810000', '820000']);
+
+// 全国省会 / 省内各市 / 市内各区县 / 区县内各乡镇的驻地坐标点避让布局
+const layoutActiveCityPoints = view => {
+  if (!root.dataset.cityPoints || !view) return;
+  const upp = unitsPerPixel(svg, view);
+  const k = 1 / upp;
+  const { left = 0, top = 0, right = 0, bottom = 0 } = viewInsets();
+  const { width, height } = svgRect(svg);
+  const bounds = {
+    x0: left + LABEL_INSET,
+    y0: top + LABEL_INSET,
+    x1: width - right - LABEL_INSET,
+    y1: height - bottom - LABEL_INSET,
+  };
+  const showPolyLabels = !root.dataset.hideLabels;
+  let g = null;
+  let points = [];
+  const obstacles = [];
+
+  if (activeCounty) {
+    g = ensureUnitTownPoints(svg, activeCounty);
+    points = townsOfUnit(activeCounty).filter(t => t.seat).map(t => ({
+      code: t.code,
+      text: t.short,
+      seat: t.seat,
+      tier: t.capital ? 'city' : 'normal',
+      priority: t.capital ? 100000 : (t.area || 1),
+    }));
+  } else if (activeCity) {
+    g = ensureCityUnitPoints(svg, activeCity);
+    points = unitsOfCity(activeCity).filter(u => u.seat).map(u => ({
+      code: u.code,
+      text: u.short,
+      seat: u.seat,
+      tier: u.capital ? 'city' : 'normal',
+      priority: u.capital ? 100000 : (u.area || 1),
+    }));
+  } else if (activeProvince) {
+    g = ensureProvinceCityPoints(svg, activeProvince);
+    const list = citiesOf(activeProvince).filter(c => c.seat);
+    if (showPolyLabels) {
+      for (const c of list) {
+        if (!c.seatName || !c.label) continue;
+        const lx = (c.label[0] - view[0]) * k;
+        const ly = (c.label[1] - view[1]) * k;
+        const w = c.short.length * LABEL_PX * 0.94 + 6;
+        const h = LABEL_PX + 4;
+        obstacles.push({ x0: lx - w / 2, x1: lx + w / 2, y0: ly - h / 2, y1: ly + h / 2 });
+      }
+    }
+    points = list.map(c => ({
+      code: c.code,
+      text: c.seatName ? (showPolyLabels ? c.seatName : `${c.short}·${c.seatName}`) : c.short,
+      seat: c.seat,
+      tier: c.capital ? 'province' : 'normal',
+      priority: c.capital ? 1000000 : (c.area || 1),
+    }));
+  } else {
+    g = ensureCountryCityPoints(svg);
+    if (showPolyLabels) {
+      const zoomed = home && home[2] / view[2] >= PROV_LABEL_ZOOM;
+      const pFont = zoomed ? PROV_LABEL_PX : PROV_LABEL_BASE_PX;
+      for (const p of provinces) {
+        if (DIRECT_SAR.has(p.code) || !p.label) continue;
+        const lx = (p.label[0] - view[0]) * k;
+        const ly = (p.label[1] - view[1]) * k;
+        const w = p.short.length * pFont * 0.94 + 4;
+        const h = pFont + 3;
+        obstacles.push({ x0: lx - w / 2, x1: lx + w / 2, y0: ly - h / 2, y1: ly + h / 2 });
+      }
+    }
+    points = provinces.filter(p => p.seat).map(p => ({
+      code: p.code,
+      text: p.capital || p.short,
+      seat: p.seat,
+      tier: p.code === '110000' ? 'country' : 'province',
+      priority: p.code === '110000'
+        ? 1000000
+        : (p.code === '810000' || p.code === '820000' ? 10 : 1000 + (p.area || 0) / 10000),
+    }));
+  }
+
+  if (!g) return;
+  const placedMap = layoutCityPoints({
+    points,
+    obstacles,
+    view: { vx: view[0], vy: view[1], k },
+    bounds,
+    base: 12,
+  });
+
+  for (const item of g.querySelectorAll('.cp-item')) {
+    const code = item.dataset.code;
+    const layout = placedMap.get(code);
+    const txt = item.querySelector('.cp-text');
+    if (!txt || !layout) continue;
+    if (item.dataset.alt) {
+      txt.textContent = showPolyLabels ? item.dataset.short : item.dataset.alt;
+    }
+    txt.setAttribute('x', String(layout.dx));
+    txt.setAttribute('y', String(layout.dy));
+    txt.setAttribute('text-anchor', layout.anchor);
+    txt.style.fontSize = `${layout.fontSize}px`;
+    if (layout.showText) txt.removeAttribute('hidden');
+    else txt.setAttribute('hidden', '');
+  }
+};
+
+// 省视图地级市名布局 / 市视图区县名布局 / 区县视图乡镇名布局 + 城市驻地位置布局
 const layoutActiveLabels = view => {
   if (activeCounty) {
     const g = ensureUnitTownLabels(svg, activeCounty);
@@ -424,6 +534,7 @@ const layoutActiveLabels = view => {
     const g = ensureProvinceCityLabels(svg, activeProvince);
     applyGroupLabels(g, citiesOf(activeProvince).filter(c => c.bbox && c.label), cityPath, view);
   }
+  layoutActiveCityPoints(view);
 };
 
 // 全国视图显示清晰的矢量省名（未放大时隐藏极小重叠区域，放大后全部展开）
@@ -445,7 +556,10 @@ const syncDetail = () => setDetail(
 const basemap = createBasemap({
   canvas: basemapCanvas,
   svg,
-  onStateChange: () => syncDetail(),
+  onStateChange: () => {
+    syncDetail();
+    if (home) layoutActiveLabels(flyingTarget ?? currentView(svg));
+  },
 });
 const layerUI = createLayerUI({
   button: $('#layer-btn'),
@@ -492,7 +606,7 @@ const flyTo = async (gen = vs.navGeneration) => {
   if (focus && activeCounty && focus.length > 6) applySelectedTown(focus);
   const target = home;
   flyingTarget = target;
-  if (activeProvince) layoutActiveLabels(target);
+  layoutActiveLabels(target);
   syncLabels(target);
   if (activeProvince) syncDetail();
   await animateView(svg, target, FLY_DURATION, syncScale);
@@ -521,6 +635,7 @@ const syncSaveBtnLabel = () => {
 const clearTownLayer = () => {
   renderCountyTowns(svg, null);
   svg.querySelector(':scope > .town-labels')?.replaceChildren();
+  for (const g of svg.querySelectorAll(':scope > .city-points > .cp-county')) g.remove();
 };
 
 const enterProvince = async code => {
@@ -536,6 +651,7 @@ const enterProvince = async code => {
   setSelected(svg, null);
   updateHover(null);
   ensureProvinceCityLabels(svg, code);
+  ensureProvinceCityPoints(svg, code);
   for (const g of svg.querySelectorAll('[data-province]')) g.classList.toggle('active', g.dataset.province === code);
   for (const g of svg.querySelectorAll('[data-city]')) g.classList.remove('active');
   for (const u of svg.querySelectorAll('.unit.active-county')) u.classList.remove('active-county');
@@ -573,6 +689,7 @@ const enterCity = async cityCode => {
   setSelected(svg, null);
   updateHover(null);
   ensureCityUnitLabels(svg, c.code);
+  ensureCityUnitPoints(svg, c.code);
   for (const g of svg.querySelectorAll('[data-province]')) g.classList.toggle('active', g.dataset.province === p.code);
   for (const g of svg.querySelectorAll('[data-city]')) g.classList.toggle('active', g.dataset.city === c.code);
   for (const u of svg.querySelectorAll('.unit.active-county')) u.classList.remove('active-county');
@@ -630,6 +747,7 @@ const enterCounty = async unitCode => {
   syncDetail();
   renderCountyTowns(svg, u.code);
   ensureUnitTownLabels(svg, u.code);
+  ensureUnitTownPoints(svg, u.code);
 
   for (const g of svg.querySelectorAll('[data-province]')) g.classList.toggle('active', g.dataset.province === p.code);
   for (const g of svg.querySelectorAll('[data-city]')) g.classList.toggle('active', g.dataset.city === c.code);
@@ -769,7 +887,7 @@ const goUp = () => {
 const resetView = () => {
   applySelectedTown(null);
   clearTimeout(relayoutTimer);
-  if (activeProvince) layoutActiveLabels(home);
+  layoutActiveLabels(home);
   syncLabels(home);
   animateView(svg, home, RESET_DURATION, syncScale).then(syncDetail);
 };
@@ -946,7 +1064,7 @@ attachGestures(svg, {
     syncScale(view);
     syncDetail();
     clearTimeout(relayoutTimer);
-    if (activeProvince) relayoutTimer = setTimeout(() => layoutActiveLabels(currentView(svg)), LABEL_RELAYOUT_DELAY);
+    relayoutTimer = setTimeout(() => layoutActiveLabels(currentView(svg)), LABEL_RELAYOUT_DELAY);
   },
 });
 
@@ -971,7 +1089,7 @@ const refit = (animate = false) => {
     Math.min(Math.max(cy - h / 2, home[1]), home[1] + home[3] - h),
     w, h,
   ];
-  if (activeProvince) layoutActiveLabels(view);
+  layoutActiveLabels(view);
   syncLabels(view);
   placeSanshaCard();
   if (animate) return animateView(svg, view, REFIT_DURATION, syncScale);
@@ -1033,7 +1151,7 @@ const preloadAssets = () => loadFine().then(() => {
     renderCountyTowns(svg, activeCounty);
     renderSubList();
   }
-  if (activeProvince) layoutActiveLabels(flyingTarget ?? currentView(svg));
+  layoutActiveLabels(flyingTarget ?? currentView(svg));
   renderInfoCard();
 }).catch(err => {
   console.warn('[舆图志] 后台资源加载失败，部分功能可能受限：', err);

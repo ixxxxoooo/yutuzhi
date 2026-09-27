@@ -1,7 +1,8 @@
-// 搜索评分与拓扑着色单元测试
+// 搜索评分、拓扑着色与城市驻地点位排版单元测试
 // @author ygw
 import { describe, it, expect } from 'vitest';
 import { assignTones, shareVertices, extractPathVerts, TONE_COUNT } from '../src/topo-color.js';
+import { layoutCityPoints } from '../src/label-layout.js';
 
 describe('topo-color', () => {
   it('TONE_COUNT 为 6', () => {
@@ -68,5 +69,27 @@ describe('search score', () => {
     expect(score(item, 'chaoyang')).toBe(2);
     expect(score(item, 'chao')).toBe(3);
     expect(score(item, 'cy')).toBe(4);
+  });
+});
+
+describe('layoutCityPoints', () => {
+  it('相邻紧密点位自动选择不同方位避免文字重叠', () => {
+    const res = layoutCityPoints({
+      points: [
+        { code: '110000', text: '北京', seat: [100, 100], tier: 'country', priority: 3 },
+        { code: '120000', text: '天津', seat: [112, 100], tier: 'province', priority: 2 },
+      ],
+      obstacles: [],
+      view: { vx: 0, vy: 0, k: 1 },
+      bounds: { x0: 0, y0: 0, x1: 500, y1: 500 },
+      base: 12,
+    });
+    expect(res.size).toBe(2);
+    const bj = res.get('110000');
+    const tj = res.get('120000');
+    expect(bj.showText).toBe(true);
+    expect(tj.showText).toBe(true);
+    // 北京在左、天津紧贴右侧 12px 时，北京不能往右排布压住天津图标
+    expect(bj.dx).toBeLessThanOrEqual(0);
   });
 });

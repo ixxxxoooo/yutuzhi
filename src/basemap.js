@@ -311,10 +311,11 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
   let lastView = null;
 
   // 状态（持久化到 localStorage）
-  const STORAGE_KEY = 'china-map-explorer:layer-v2';
+  const STORAGE_KEY = 'china-map-explorer:layer-v3';
   const state = {
     basemap: 'paper',
     roadOverlay: false,
+    cityPoints: false,
     countyGrid: false,
     showLabels: true,
     fillAlpha: 0.65,
@@ -348,6 +349,8 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
       else delete root.dataset.basemapDark;
       canvas.hidden = false;
     }
+    if (state.cityPoints) root.dataset.cityPoints = '1';
+    else delete root.dataset.cityPoints;
     if (state.countyGrid) root.dataset.countyGrid = '1';
     else delete root.dataset.countyGrid;
     if (!state.showLabels) root.dataset.hideLabels = '1';
@@ -586,7 +589,7 @@ export const createLayerUI = ({ button, menu, basemap }) => {
     const st = basemap.getState();
     const bm = basemapById.get(st.basemap) ?? BASEMAPS[0];
     labelEl.textContent = bm.id === 'paper' ? '图层' : `图层 · ${bm.name}`;
-    button.classList.toggle('layer-active', bm.id !== 'paper' || st.countyGrid);
+    button.classList.toggle('layer-active', bm.id !== 'paper' || st.countyGrid || st.cityPoints);
     if (menu.hidden) return;
 
     const canRoadOverlay = bm.id === 'satellite' || bm.id === 'shaded' || bm.id === 'topo';
@@ -605,6 +608,10 @@ export const createLayerUI = ({ button, menu, basemap }) => {
       <div class="layer-sec">
         <h3>叠加图层</h3>
         <div class="layer-toggles">
+          <button type="button" class="layer-toggle${st.cityPoints ? ' active' : ''}" data-toggle="cityPoints" aria-pressed="${st.cityPoints}">
+            <span>城市与省会位置<small>全国显示省会 · 省视图显示各市 · 市县显示治所</small></span>
+            <i class="chk"></i>
+          </button>
           <button type="button" class="layer-toggle${st.roadOverlay ? ' active' : ''}" data-toggle="roadOverlay" ${canRoadOverlay ? '' : 'disabled'} aria-pressed="${st.roadOverlay}">
             <span>路网与地名注记<small>${canRoadOverlay ? '在卫星/地形图上叠加道路与中文地名' : '仅卫星与地形底图可用'}</small></span>
             <i class="chk"></i>

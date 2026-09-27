@@ -5,7 +5,7 @@ import {
   unitPath, cityPath, townPath,
   provinceByCode, cityByCode, unitByCode,
 } from './map.js';
-import { layoutLabels, leaderEnd } from './label-layout.js';
+import { layoutLabels, leaderEnd, layoutCityPoints } from './label-layout.js';
 
 const FONT = '"CityEx Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
 
@@ -31,6 +31,67 @@ const roundRect = (ctx, x, y, w, h, r) => {
   ctx.closePath();
 };
 
+const drawStar = (ctx, cx, cy, outerR, innerR) => {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    const r = i % 2 === 0 ? outerR : innerR;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+};
+
+const drawCityPointMarker = (ctx, px, py, tier) => {
+  if (tier === 'country') {
+    ctx.beginPath();
+    ctx.arc(px, py, 6.6, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px, py, 5.1, 0, Math.PI * 2);
+    ctx.fillStyle = '#dc2626';
+    ctx.fill();
+    drawStar(ctx, px, py, 3.6, 1.45);
+    ctx.fillStyle = '#fde047';
+    ctx.fill();
+  } else if (tier === 'province' || tier === 'city') {
+    ctx.beginPath();
+    ctx.arc(px, py, 5.6, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px, py, 4.1, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = 1.7;
+    ctx.strokeStyle = '#dc2626';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(px, py, 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#dc2626';
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.arc(px, py, 4.3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = '#1e293b';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(px, py, 1.35, 0, Math.PI * 2);
+    ctx.fillStyle = '#dc2626';
+    ctx.fill();
+  }
+};
+
 // 将当前 #map 的矢量图层内联计算样式并光栅化为指定宽高与 viewBox 的图像
 const renderSvgGeometryToImage = (liveSvg, box, width, height, scale, hideInset) => new Promise((resolve, reject) => {
   const root = document.documentElement;
@@ -45,8 +106,8 @@ const renderSvgGeometryToImage = (liveSvg, box, width, height, scale, hideInset)
   clone.setAttribute('width', String(width));
   clone.setAttribute('height', String(height));
 
-  // 移除文字、引线与未使用的占位节点（文字稍后在 Canvas 上使用 CityEx Sans 高清绘制）
-  for (const q of ['.prov-labels', '.city-labels', '.labels', '.town-labels', '.hover-layer', '.line-county']) {
+  // 移除文字、引线、城市点位与未使用的占位节点（文字与点位稍后在 Canvas 上使用 CityEx Sans 高清绘制）
+  for (const q of ['.prov-labels', '.city-labels', '.labels', '.town-labels', '.city-points', '.hover-layer', '.line-county']) {
     clone.querySelector(q)?.remove();
   }
   if (hideInset) {
@@ -255,23 +316,35 @@ export const generateMapPoster = async ({
 
   ctx.drawImage(mapImg, mapX, mapY, mapW, mapH);
 
-  // 4. 在地图画框内绘制行政区名称与引线
+  // 4. 在地图画框内绘制行政区名称、引线与城市/驻地点位
+  const hideLabels = Boolean(document.documentElement.dataset.hideLabels);
+  const showCityPoints = Boolean(document.documentElement.dataset.cityPoints);
+  const viewObj = { vx: fitBox[0], vy: fitBox[1], k: s };
+  const boundsObj = { x0: 16, y0: 16, x1: mapW - 16, y1: mapH - 16 };
+  const obstacles = [];
+
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (isCountry) {
-    // 全国视图：绘制各省简称
-    const SKIP = new Set(['810000', '820000']);
-    ctx.font = `bold 13px ${FONT}`;
-    ctx.lineJoin = 'round';
-    for (const p of provinces) {
-      if (SKIP.has(p.code) || !p.label) continue;
-      const px = mapX + (p.label[0] - fitBox[0]) * s;
-      const py = mapY + (p.label[1] - fitBox[1]) * s;
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
-      ctx.strokeText(p.short, px, py);
-      ctx.fillStyle = '#222222';
-      ctx.fillText(p.short, px, py);
+    if (!hideLabels) {
+      // 全国视图：绘制各省简称（开启省会点位时自动跳过直辖市与港澳同名省标）
+      const SKIP = showCityPoints
+        ? new Set(['110000', '120000', '310000', '500000', '810000', '820000'])
+        : new Set(['810000', '820000']);
+      ctx.font = `bold 13px ${FONT}`;
+      ctx.lineJoin = 'round';
+      for (const p of provinces) {
+        if (SKIP.has(p.code) || !p.label) continue;
+        const lx = (p.label[0] - fitBox[0]) * s;
+        const ly = (p.label[1] - fitBox[1]) * s;
+        const w = p.short.length * 13 + 6;
+        obstacles.push({ x0: lx - w / 2, y0: ly - 8, x1: lx + w / 2, y1: ly + 8 });
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+        ctx.strokeText(p.short, mapX + lx, mapY + ly);
+        ctx.fillStyle = showCityPoints ? '#575248' : '#222222';
+        ctx.fillText(p.short, mapX + lx, mapY + ly);
+      }
     }
     // 南海诸岛文字
     const [bx, by, bw, bh] = [530, 445, 95, 115];
@@ -281,8 +354,9 @@ export const generateMapPoster = async ({
     ctx.font = `11px ${FONT}`;
     ctx.fillStyle = '#6b665c';
     ctx.fillText('南海诸岛', ix, iy);
-  } else {
+  } else if (!hideLabels && (!showCityPoints || (!activeCounty && !activeCity))) {
     // 省 / 市 / 区县视图：调用 layoutLabels 自动排布子区域标签与引线
+    // 当开启城市/驻地点位时，仅保留省视图下自治州/盟（州名与首府名不同）的政区面标签
     let items = [];
     let pathOf = unitPath;
     if (activeCounty) {
@@ -292,15 +366,17 @@ export const generateMapPoster = async ({
       items = unitsOfCity(activeCity).filter(u => u.d && u.label);
       pathOf = unitPath;
     } else if (activeProvince) {
-      items = citiesOf(activeProvince).filter(c => c.bbox && c.label);
+      items = citiesOf(activeProvince).filter(
+        c => c.bbox && c.label && (!showCityPoints || (c.seatName && c.seatName !== c.short)),
+      );
       pathOf = cityPath;
     }
 
     const { labels } = layoutLabels({
       units: items,
       pathOf,
-      view: { vx: fitBox[0], vy: fitBox[1], k: s },
-      bounds: { x0: 16, y0: 16, x1: mapW - 16, y1: mapH - 16 },
+      view: viewObj,
+      bounds: boundsObj,
       base: 14,
       scales: [1, 0.88, 0.76],
     });
@@ -327,15 +403,88 @@ export const generateMapPoster = async ({
     }
 
     // 再画标签文字
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
     for (const l of labels) {
       const fontSize = Math.round(l.s);
+      const w = l.u.short.length * fontSize + 6;
+      obstacles.push({ x0: l.x - w / 2, y0: l.y - fontSize * 0.6, x1: l.x + w / 2, y1: l.y + fontSize * 0.6 });
       ctx.font = `bold ${fontSize}px ${FONT}`;
       ctx.lineWidth = 4.2;
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.94)';
       ctx.strokeText(l.u.short, mapX + l.x, mapY + l.y);
-      ctx.fillStyle = '#1e293b';
+      ctx.fillStyle = showCityPoints ? '#575248' : '#1e293b';
       ctx.fillText(l.u.short, mapX + l.x, mapY + l.y);
+    }
+  }
+
+  // 若开启城市与省会位置图层，绘制符号化点位与避让后的点位名称
+  if (showCityPoints) {
+    let rawPoints = [];
+    if (isCountry) {
+      rawPoints = provinces.filter(p => p.seat).map(p => ({
+        code: p.code,
+        text: p.capital || p.short,
+        seat: p.seat,
+        tier: p.code === '110000' ? 'country' : 'province',
+        priority: p.code === '110000' ? 1000000 : (p.code === '810000' || p.code === '820000' ? 10 : 1000 + (p.area || 0) / 10000),
+      }));
+    } else if (activeCounty) {
+      rawPoints = townsOfUnit(activeCounty).filter(t => t.seat || t.label).map(t => ({
+        code: t.code,
+        text: t.short || t.name,
+        seat: t.seat || t.label,
+        tier: t.capital ? 'city' : 'normal',
+        priority: t.capital ? 100000 : (t.area || 1),
+      }));
+    } else if (activeCity) {
+      rawPoints = unitsOfCity(activeCity).filter(u => u.seat || u.label).map(u => ({
+        code: u.code,
+        text: u.short,
+        seat: u.seat || u.label,
+        tier: u.capital ? 'city' : 'normal',
+        priority: u.capital ? 100000 : (u.area || 1),
+      }));
+    } else if (activeProvince) {
+      rawPoints = citiesOf(activeProvince).filter(c => c.seat || c.label).map(c => ({
+        code: c.code,
+        text: c.seatName ? (!hideLabels ? c.seatName : `${c.short}·${c.seatName}`) : c.short,
+        seat: c.seat || c.label,
+        tier: c.capital ? 'province' : 'normal',
+        priority: c.capital ? 1000000 : (c.area || 1),
+      }));
+    }
+
+    const placedMap = layoutCityPoints({
+      points: rawPoints,
+      obstacles,
+      view: viewObj,
+      bounds: boundsObj,
+      base: isCountry ? 12 : 13,
+    });
+
+    // 先统一画点位符号，再画文字，保证符号不被邻近文字遮盖、文字清晰可读
+    for (const p of rawPoints) {
+      const sx = (p.seat[0] - viewObj.vx) * viewObj.k;
+      const sy = (p.seat[1] - viewObj.vy) * viewObj.k;
+      drawCityPointMarker(ctx, mapX + sx, mapY + sy, p.tier);
+    }
+    ctx.lineJoin = 'round';
+    ctx.textBaseline = 'middle';
+    for (const p of rawPoints) {
+      const layout = placedMap.get(p.code);
+      if (!layout || !layout.showText) continue;
+      const sx = (p.seat[0] - viewObj.vx) * viewObj.k;
+      const sy = (p.seat[1] - viewObj.vy) * viewObj.k;
+      const isCap = p.tier === 'country' || p.tier === 'province' || p.tier === 'city';
+      ctx.font = `bold ${layout.fontSize}px ${FONT}`;
+      ctx.textAlign = layout.anchor === 'end' ? 'right' : layout.anchor === 'middle' ? 'center' : 'left';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.94)';
+      ctx.strokeText(p.text, mapX + sx + layout.dx, mapY + sy + layout.dy);
+      ctx.fillStyle = isCap ? '#991b1b' : '#1e293b';
+      ctx.fillText(p.text, mapX + sx + layout.dx, mapY + sy + layout.dy);
     }
   }
   ctx.restore();

@@ -202,12 +202,15 @@ export const getRegionData = (target, { activeCounty = null } = {}) => {
     const previewList = p.direct || isTaiwan ? pUnits : pCities;
     const previewNames = previewList.slice(0, 14).map(x => x.short).join(' · ')
       + (previewList.length > 14 ? ' 等' : '');
+    const subCapText = !p.direct && !isSar && p.capital
+      ? ` · ${p.name.endsWith('自治区') ? '首府' : '省会'}：${p.capital}`
+      : '';
     const subTownText = p.towns ? ` · 乡镇街道：${p.towns} 个` : '';
     return {
       title: p.name,
       badge: target.isNeighbor ? `邻省 · ${provTypeOf(p)}` : provTypeOf(p),
       code: p.code,
-      sub: `简称：${p.short} · 代码：${p.code}${subTownText}`,
+      sub: `简称：${p.short}${subCapText} · 代码：${p.code}${subTownText}`,
       stats: [
         cityStat,
         unitStat,
@@ -225,11 +228,13 @@ export const getRegionData = (target, { activeCounty = null } = {}) => {
     const cUnits = unitsOfCity(c.code);
     const pct = p.area ? ((c.area / p.area) * 100).toFixed(1) : '—';
     const previewNames = cUnits.slice(0, 14).map(u => u.short).join(' · ') + (cUnits.length > 14 ? ' 等' : '');
+    const capPrefix = c.capital && !p.direct ? `${p.name.endsWith('自治区') ? '首府' : '省会'} · ` : '';
+    const seatText = c.seatName ? ` · 驻地：${c.seatName}` : '';
     return {
       title: c.name,
-      badge: target.isNeighbor ? `邻市 · ${cityTypeOf(c)}` : cityTypeOf(c),
+      badge: `${target.isNeighbor ? '邻市 · ' : ''}${capPrefix}${cityTypeOf(c)}`,
       code: c.code,
-      sub: `所属：${p.name}（${p.short}） · 代码：${c.code}`,
+      sub: `所属：${p.name}（${p.short}）${seatText} · 代码：${c.code}`,
       stats: [
         { label: '下辖区县', value: `${cUnits.length} 个`, note: breakdownUnits(cUnits) },
         { label: '下辖乡镇/街道', value: `${c.towns || 0} 个`, note: '街道 / 镇 / 乡' },

@@ -188,7 +188,7 @@ export const townsOfUnit = unitCode => {
   const list = computeTownCells({
     pathD: unitPath(unitCode),
     entries,
-    meta: { code: u.code, city: u.city, province: u.province, area: u.area, bbox: u.bbox, center: u.center },
+    meta: { code: u.code, city: u.city, province: u.province, area: u.area, bbox: u.bbox, center: u.center, seat: u.seat },
   });
   return storeTownList(unitCode, list);
 };
@@ -206,7 +206,7 @@ export const ensureTownsOfUnit = async unitCode => {
   const entries = rawTowns[unitCode] ?? [];
   if (!entries.length) return [];
 
-  const meta = { code: u.code, city: u.city, province: u.province, area: u.area, bbox: u.bbox, center: u.center };
+  const meta = { code: u.code, city: u.city, province: u.province, area: u.area, bbox: u.bbox, center: u.center, seat: u.seat };
   const pathD = unitPath(unitCode);
   const worker = entries.length >= VORONOI_WORKER_THRESHOLD ? getVoronoiWorker() : null;
 
@@ -420,14 +420,18 @@ export const setHover = (svg, target) => {
     const cls = target.isNeighbor ? 'hovered-neighbor' : 'hovered';
     if (target.type === 'province') {
       svg.querySelector(`.prov[data-province="${target.code}"]`)?.classList.add(cls);
+      svg.querySelector(`.city-points .cp-country .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
     } else if (target.type === 'city') {
       svg.querySelector(`.city[data-city="${target.code}"]`)?.classList.add(cls);
+      svg.querySelector(`.city-points .cp-province.active .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
     } else if (target.type === 'unit') {
       for (const node of svg.querySelectorAll(`.unit[data-code="${target.code}"]`)) {
         node.classList.add(cls);
       }
+      svg.querySelector(`.city-points .cp-group.active .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
     } else if (target.type === 'town') {
       svg.querySelector(`.town[data-town="${target.code}"]`)?.classList.add(cls);
+      svg.querySelector(`.city-points .cp-county.active .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
     }
   }
   syncHighlightLayer(svg);
@@ -441,8 +445,10 @@ export const setSelected = (svg, target) => {
     for (const node of svg.querySelectorAll(`.unit[data-code="${target.code}"]`)) {
       node.classList.add('selected');
     }
+    svg.querySelector(`.city-points .cp-group.active .cp-item[data-code="${target.code}"]`)?.classList.add('selected');
   } else if (target?.type === 'town') {
     svg.querySelector(`.town[data-town="${target.code}"]`)?.classList.add('selected');
+    svg.querySelector(`.city-points .cp-county.active .cp-item[data-code="${target.code}"]`)?.classList.add('selected');
   }
   syncHighlightLayer(svg);
 };
@@ -539,7 +545,12 @@ export const ensureProvinceCityLabels = (svg, code) => {
   el('g', { class: 'leaders' }, g);
   for (const c of citiesOf(code)) {
     if (!c.label) continue;
-    el('text', { x: c.label[0], y: c.label[1], 'data-code': c.code }, g).textContent = c.short;
+    el('text', {
+      x: c.label[0],
+      y: c.label[1],
+      'data-code': c.code,
+      ...(c.seatName ? { 'data-seat-diff': '1' } : {}),
+    }, g).textContent = c.short;
   }
   return g;
 };
@@ -570,6 +581,124 @@ export const ensureUnitTownLabels = (svg, unitCode) => {
   for (const t of townsOfUnit(unitCode)) {
     if (!t.label) continue;
     el('text', { x: t.label[0], y: t.label[1], 'data-code': t.code }, g).textContent = t.short;
+  }
+  return g;
+};
+
+// ---------- 城市/省会/治所驻地坐标图层 ----------
+const STAR_D = 'M0,-4.1L1.02,-1.25L4,-1.25L1.6,0.5L2.5,3.4L0,1.65L-2.5,3.4L-1.6,0.5L-4,-1.25L-1.02,-1.25Z';
+
+const appendPinNode = (parent, { code, seat, text, altText, tier = 'normal', extraAttrs = {} }) => {
+  if (!Array.isArray(seat) || seat.length < 2) return null;
+  const item = el('g', {
+    class: 'cp-item',
+    transform: `translate(${seat[0]}, ${seat[1]})`,
+    'data-code': code,
+    'data-tier': tier,
+    ...(altText ? { 'data-short': text, 'data-alt': altText } : {}),
+    ...extraAttrs,
+  }, parent);
+  const pin = el('g', { class: 'cp-pin' }, item);
+  if (tier === 'country') {
+    el('circle', { class: 'cp-halo', r: '6.2' }, pin);
+    el('circle', { class: 'cp-ring', r: '4.8' }, pin);
+    el('path', { class: 'cp-star', d: STAR_D }, pin);
+  } else if (tier === 'province' || tier === 'city') {
+    el('circle', { class: 'cp-halo', r: '5.2' }, pin);
+    el('circle', { class: 'cp-ring', r: '3.8' }, pin);
+    el('circle', { class: 'cp-dot', r: '1.75' }, pin);
+  } else {
+    el('circle', { class: 'cp-halo', r: '4.1' }, pin);
+    el('circle', { class: 'cp-ring', r: '2.85' }, pin);
+    el('circle', { class: 'cp-dot', r: '1.25' }, pin);
+  }
+  el('text', {
+    class: 'cp-text',
+    x: tier === 'normal' ? '6.5' : '8',
+    y: '0',
+  }, pin).textContent = text;
+  return item;
+};
+
+// 全国视图：34 个省级行政中心（首都 + 省会/首府/直辖市/特区）
+export const ensureCountryCityPoints = svg => {
+  const layer = svg.querySelector(':scope > .city-points');
+  if (!layer) return null;
+  let g = layer.querySelector('g.cp-country');
+  if (g) return g;
+  g = el('g', { class: 'cp-group cp-country active' }, layer);
+  // 普通省会先画，首都北京最后画在最顶层
+  const ordered = [...provinces].sort((a, b) => (a.code === '110000' ? 1 : b.code === '110000' ? -1 : 0));
+  for (const p of ordered) {
+    if (!p.seat) continue;
+    appendPinNode(g, {
+      code: p.code,
+      seat: p.seat,
+      text: p.capital || p.short,
+      tier: p.code === '110000' ? 'country' : 'province',
+      extraAttrs: { 'data-province': p.code },
+    });
+  }
+  return g;
+};
+
+// 省视图：省会/首府 + 省内各地级市/自治州/地区/盟/直辖县驻地
+export const ensureProvinceCityPoints = (svg, provCode) => {
+  const layer = svg.querySelector(':scope > .city-points');
+  if (!layer) return null;
+  let g = layer.querySelector(`g.cp-province[data-province="${provCode}"]`);
+  if (g) return g;
+  g = el('g', { class: 'cp-group cp-province', 'data-province': provCode }, layer);
+  const list = [...citiesOf(provCode)].sort((a, b) => (a.capital ? 1 : b.capital ? -1 : 0));
+  for (const c of list) {
+    if (!c.seat) continue;
+    appendPinNode(g, {
+      code: c.code,
+      seat: c.seat,
+      text: c.seatName || c.short,
+      altText: c.seatName ? `${c.short}·${c.seatName}` : null,
+      tier: c.capital ? 'province' : 'normal',
+    });
+  }
+  return g;
+};
+
+// 市视图：市政府驻地 + 市内各区县（县城/区治）驻地
+export const ensureCityUnitPoints = (svg, cityCode) => {
+  const layer = svg.querySelector(':scope > .city-points');
+  if (!layer) return null;
+  let g = layer.querySelector(`g.cp-city[data-city="${cityCode}"]`);
+  if (g) return g;
+  g = el('g', { class: 'cp-group cp-city', 'data-city': cityCode }, layer);
+  const list = [...unitsOfCity(cityCode)].sort((a, b) => (a.capital ? 1 : b.capital ? -1 : 0));
+  for (const u of list) {
+    if (!u.seat) continue;
+    appendPinNode(g, {
+      code: u.code,
+      seat: u.seat,
+      text: u.short,
+      tier: u.capital ? 'city' : 'normal',
+    });
+  }
+  return g;
+};
+
+// 区县视图：区县政府驻地 + 各乡镇/街道办事处驻地
+export const ensureUnitTownPoints = (svg, unitCode) => {
+  const layer = svg.querySelector(':scope > .city-points');
+  if (!layer) return null;
+  let g = layer.querySelector(`g.cp-county[data-unit="${unitCode}"]`);
+  if (g) g.remove();
+  g = el('g', { class: 'cp-group cp-county active', 'data-unit': unitCode }, layer);
+  const list = [...townsOfUnit(unitCode)].sort((a, b) => (a.capital ? 1 : b.capital ? -1 : 0));
+  for (const t of list) {
+    if (!t.seat) continue;
+    appendPinNode(g, {
+      code: t.code,
+      seat: t.seat,
+      text: t.short,
+      tier: t.capital ? 'city' : 'normal',
+    });
   }
   return g;
 };
@@ -669,6 +798,9 @@ export const buildMap = (svg, { withLabels = true } = {}) => {
     el('g', { class: 'labels' }, svg);
     // 乡镇/街道名容器：区县视图下由 ensureUnitTownLabels 按需填充
     el('g', { class: 'town-labels' }, svg);
+    // 城市/省会/治所驻地坐标图层
+    el('g', { class: 'city-points' }, svg);
+    ensureCountryCityPoints(svg);
   }
 
   // 南海诸岛插图：迷你卡片

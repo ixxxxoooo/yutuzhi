@@ -118,3 +118,94 @@ export const leaderEnd = ({ x, y, s, leader: [ax, ay] }) => {
   const dx = x - ax, dy = y - ay, len = Math.hypot(dx, dy) || 1;
   return [x - dx / len * s * 0.85, y - dy / len * s * 0.55];
 };
+
+/**
+ * 城市/驻地坐标点的八方向避让标签布局（所有偏移均为屏幕像素）
+ * @param {object} opts
+ * @param {Array<{code: string, text: string, seat: [number, number], tier?: string, priority?: number}>} opts.points
+ * @param {Array<{x0: number, y0: number, x1: number, y1: number}>} [opts.obstacles]
+ * @param {{vx: number, vy: number, k: number}} opts.view
+ * @param {{x0: number, y0: number, x1: number, y1: number}} opts.bounds
+ * @param {number} [opts.base]
+ * @returns {Map<string, {dx: number, dy: number, anchor: string, fontSize: number, showText: boolean}>}
+ */
+export const layoutCityPoints = ({
+  points,
+  obstacles = [],
+  view: { vx, vy, k },
+  bounds,
+  base = 12,
+}) => {
+  const result = new Map();
+  if (!points?.length) return result;
+
+  const inBounds = b => b.x0 >= bounds.x0 && b.x1 <= bounds.x1 && b.y0 >= bounds.y0 && b.y1 <= bounds.y1;
+  const items = points
+    .filter(p => Array.isArray(p.seat) && p.seat.length === 2)
+    .map(p => {
+      const x = (p.seat[0] - vx) * k;
+      const y = (p.seat[1] - vy) * k;
+      const r = p.tier === 'country' ? 6.2 : p.tier === 'province' || p.tier === 'city' ? 5.2 : 4.0;
+      return { ...p, x, y, r, priority: p.priority ?? 0 };
+    });
+
+  // 所有点位的图标本身先作为障碍物，防止任何文字压盖其他城市点位
+  const dotBoxes = items.map(it => ({
+    code: it.code,
+    x0: it.x - it.r - 1.5,
+    x1: it.x + it.r + 1.5,
+    y0: it.y - it.r - 1.5,
+    y1: it.y + it.r + 1.5,
+  }));
+
+  const placed = [...obstacles];
+
+  const candidateDirs = (r, sz) => [
+    { dx: r + 3.5, dy: 0, anchor: 'start', ax: 0 },
+    { dx: -(r + 3.5), dy: 0, anchor: 'end', ax: -1 },
+    { dx: 0, dy: r + sz * 0.6 + 1.5, anchor: 'middle', ax: -0.5 },
+    { dx: 0, dy: -(r + sz * 0.6 + 1.5), anchor: 'middle', ax: -0.5 },
+    { dx: r + 2, dy: r + sz * 0.5, anchor: 'start', ax: 0 },
+    { dx: r + 2, dy: -(r + sz * 0.5), anchor: 'start', ax: 0 },
+    { dx: -(r + 2), dy: r + sz * 0.5, anchor: 'end', ax: -1 },
+    { dx: -(r + 2), dy: -(r + sz * 0.5), anchor: 'end', ax: -1 },
+  ];
+
+  const sorted = [...items].sort((a, b) => b.priority - a.priority);
+  for (const it of sorted) {
+    const baseSz = it.tier === 'country' ? base + 1 : it.tier === 'province' || it.tier === 'city' ? base + 0.5 : base;
+    // 屏幕外的点位给默认右侧偏移
+    if (it.x < bounds.x0 || it.x > bounds.x1 || it.y < bounds.y0 || it.y > bounds.y1) {
+      result.set(it.code, { dx: it.r + 3.5, dy: 0, anchor: 'start', fontSize: baseSz, showText: true });
+      continue;
+    }
+
+    let chosen = null;
+    for (const scale of [1, 0.9]) {
+      const sz = Math.round(baseSz * scale * 10) / 10;
+      const w = it.text.length * sz * 0.94 + 4;
+      const h = sz + 2;
+      for (const d of candidateDirs(it.r, sz)) {
+        const x0 = it.x + d.dx + d.ax * w;
+        const y0 = it.y + d.dy - h / 2;
+        const box = { x0, y0, x1: x0 + w, y1: y0 + h };
+        if (!inBounds(box)) continue;
+        if (placed.some(b => overlaps(b, box))) continue;
+        if (dotBoxes.some(db => db.code !== it.code && overlaps(db, box))) continue;
+        chosen = { dx: d.dx, dy: d.dy, anchor: d.anchor, fontSize: sz, showText: true };
+        placed.push(box);
+        break;
+      }
+      if (chosen) break;
+    }
+
+    if (chosen) {
+      result.set(it.code, chosen);
+    } else {
+      result.set(it.code, { dx: it.r + 3.5, dy: 0, anchor: 'start', fontSize: baseSz, showText: false });
+    }
+  }
+
+  return result;
+};
+

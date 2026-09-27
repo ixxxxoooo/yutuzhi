@@ -717,6 +717,103 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 [data-basemap-dark] .labels circle,
 [data-basemap-dark] .town-labels circle { fill: #0f172a; stroke: #fff; }
 
+/* ---------- 城市与省会位置叠加图层 (.city-points) ---------- */
+.city-points { display: none; pointer-events: none; }
+[data-city-points] .city-points { display: inline; }
+.city-points .cp-group { visibility: hidden; }
+[data-view="country"] .city-points .cp-country.active,
+[data-view="province"] .city-points .cp-province.active,
+[data-view="city"] .city-points .cp-city.active,
+[data-view="county"] .city-points .cp-county.active { visibility: visible; }
+
+/* 借助 --k 将内部符号与文字还原为恒定屏幕像素尺寸，缩放与飞行动画全程清晰不走形 */
+.cp-pin { transform: scale(var(--k, 1)); }
+.cp-pin * { vector-effect: none !important; }
+.cp-halo { fill: rgba(255, 255, 255, .94); }
+
+/* 三级城市驻地符号：首都五星章 (★) · 省会/首府/市府/县城双环靶标 (◎) · 一般城市/区县/乡镇圆环点 (⊙) */
+.cp-item[data-tier="country"] .cp-ring { fill: #dc2626; stroke: #ffffff; stroke-width: 1.1px; }
+.cp-item[data-tier="country"] .cp-star { fill: #fde047; stroke: none; }
+.cp-item[data-tier="province"] .cp-ring,
+.cp-item[data-tier="city"] .cp-ring { fill: #ffffff; stroke: #dc2626; stroke-width: 1.65px; }
+.cp-item[data-tier="province"] .cp-dot,
+.cp-item[data-tier="city"] .cp-dot { fill: #dc2626; }
+.cp-item[data-tier="normal"] .cp-ring { fill: #ffffff; stroke: #1e293b; stroke-width: 1.4px; }
+.cp-item[data-tier="normal"] .cp-dot { fill: #dc2626; }
+
+.cp-text {
+  font-size: 12px;
+  font-weight: bold;
+  dominant-baseline: central;
+  fill: #1e293b;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, .94);
+  stroke-width: 3.4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.cp-item[data-tier="country"] .cp-text,
+.cp-item[data-tier="province"] .cp-text,
+.cp-item[data-tier="city"] .cp-text {
+  font-size: 12.8px;
+  fill: #991b1b;
+}
+
+/* 悬停与选中区域联动高亮对应驻地点位 */
+.cp-item.hovered .cp-pin { transform: scale(calc(var(--k, 1) * 1.18)); }
+.cp-item.hovered .cp-halo { fill: var(--hl-fill); stroke: var(--hl-border); stroke-width: 1.3px; }
+.cp-item.hovered .cp-text { fill: #b91c1c; stroke: var(--hl-fill); display: inline !important; }
+.cp-item.selected .cp-halo { fill: var(--sel-fill); stroke: var(--sel-border); stroke-width: 1.3px; }
+.cp-item.selected .cp-text { fill: #0369a1; display: inline !important; }
+
+/* 开启城市点位时与政区面标签的视觉协同（去重、主次分层） */
+/* 1. 全国视图：隐藏直辖市/港澳同名省标避免双重文字；其余省名微退为温润区域底标，突出 34 个省会/首府点位 */
+[data-view="country"][data-city-points] .prov-labels text[data-province="110000"],
+[data-view="country"][data-city-points] .prov-labels text[data-province="120000"],
+[data-view="country"][data-city-points] .prov-labels text[data-province="310000"],
+[data-view="country"][data-city-points] .prov-labels text[data-province="500000"],
+[data-view="country"][data-city-points] .prov-labels text[data-province="810000"],
+[data-view="country"][data-city-points] .prov-labels text[data-province="820000"] {
+  opacity: 0 !important;
+}
+[data-view="country"][data-city-points] .prov-labels text {
+  fill: #575248;
+  font-size: calc(var(--prov-label-size, 12.5px) * .92);
+}
+/* 2. 省视图：由驻地符号旁直接展示城市名；仅当自治州/盟名称与首府不同时（如凉山→西昌）保留州名面标签 */
+[data-view="province"][data-city-points] .city-labels .leaders,
+[data-view="province"][data-city-points] .city-labels text:not([data-seat-diff]) {
+  display: none;
+}
+[data-view="province"][data-city-points] .city-labels text[data-seat-diff] {
+  fill: #575248;
+}
+/* 3. 市视图 / 区县视图：由区县驻地与乡镇驻地直接承载名称，隐藏重复的几何中心面标签 */
+[data-view="city"][data-city-points] .labels,
+[data-view="county"][data-city-points] .town-labels {
+  display: none;
+}
+
+/* 暗色卫星底图下的城市点位配色适配 */
+[data-basemap-dark] .cp-halo { fill: rgba(10, 16, 26, .9); }
+[data-basemap-dark] .cp-item[data-tier="normal"] .cp-ring { fill: #0f172a; stroke: #f8fafc; }
+[data-basemap-dark] .cp-item[data-tier="normal"] .cp-dot { fill: #f87171; }
+[data-basemap-dark] .cp-item[data-tier="province"] .cp-ring,
+[data-basemap-dark] .cp-item[data-tier="city"] .cp-ring { fill: #0f172a; stroke: #f87171; }
+[data-basemap-dark] .cp-item[data-tier="province"] .cp-dot,
+[data-basemap-dark] .cp-item[data-tier="city"] .cp-dot { fill: #ef4444; }
+[data-basemap-dark] .cp-text { fill: #f8fafc; stroke: rgba(10, 16, 26, .92); }
+[data-basemap-dark] .cp-item[data-tier="country"] .cp-text,
+[data-basemap-dark] .cp-item[data-tier="province"] .cp-text,
+[data-basemap-dark] .cp-item[data-tier="city"] .cp-text {
+  fill: #fde047;
+  stroke: rgba(10, 16, 26, .94);
+}
+[data-basemap-dark][data-view="country"][data-city-points] .prov-labels text,
+[data-basemap-dark][data-view="province"][data-city-points] .city-labels text[data-seat-diff] {
+  fill: rgba(255, 255, 255, .74);
+}
+
 /* ---------- 地图导出预览弹窗 (#export-modal) ---------- */
 #export-modal {
   position: fixed; inset: 0; z-index: 30;

@@ -33,10 +33,12 @@ const SANSHA_CITY = '460300';
 // ---------- 1. 汇总省份、地级市与区县标记单位 ----------
 const china = await readJSON('100000_full.json');
 const provinces = [];
+const rawProvCenter = new Map();
 let jd = null;
 for (const f of china.features) {
   const code = String(f.properties.adcode);
   if (code === '100000_JD') { jd = f; continue; }
+  if (Array.isArray(f.properties.center)) rawProvCenter.set(code, f.properties.center);
   const single = SINGLE_UNIT.includes(code);
   const direct = DIRECT_PROV.has(code) && !single;
   const short = shortName(code, f.properties.name);
@@ -44,6 +46,8 @@ for (const f of china.features) {
 }
 
 const rawCities = await readJSON('100000_full_city.json');
+const rawCityCenter = new Map();
+const rawUnitCenter = new Map();
 const cityMeta = new Map();
 for (const p of provinces) {
   if (p.direct || p.single) {
@@ -53,6 +57,7 @@ for (const p of provinces) {
 for (const f of rawCities.features) {
   const code = String(f.properties.adcode);
   if (!/^\d{6}$/.test(code) || code === '100000') continue;
+  if (Array.isArray(f.properties.center)) rawCityCenter.set(code, f.properties.center);
   const province = code.slice(0, 2) + '0000';
   if (DIRECT_PROV.has(province)) continue;
   const short = shortName(code, f.properties.name);
@@ -74,6 +79,7 @@ for (const p of provinces) {
   for (const f of dfc.features) {
     const code = String(f.properties.adcode);
     if (!/^\d{6}$/.test(code)) continue;
+    if (Array.isArray(f.properties.center)) rawUnitCenter.set(code, f.properties.center);
     const parent = String(f.properties.parent?.adcode ?? p.code);
     let city = parent;
     let meshCity = parent;
@@ -292,6 +298,10 @@ const mainParts = geom => {
   return { type: 'MultiPolygon', coordinates: polys.filter((_, i) => areas[i] >= max * 0.01) };
 };
 
+const inBBox = ([x, y], [x0, y0, x1, y1], pad = 0.5) => (
+  x >= x0 - pad && x <= x1 + pad && y >= y0 - pad && y <= y1 + pad
+);
+
 const coarseByCode = new Map(levels.coarse.fc.features.map(f => [f.properties.code, f]));
 const unitsOut = fc.features.map(f => {
   const { code, name, province, city } = f.properties;
@@ -302,12 +312,26 @@ const unitsOut = fc.features.map(f => {
   const short = shortName(code, name);
   const area = calcAreaKm2(f.geometry);
   const center = geoCentroid(f.geometry).map(r2);
-  const towns = (townsData[code] ?? []).length;
+  const tList = townsData[code] ?? [];
+  const towns = tList.length;
+  let seat = null;
+  if (!isSansha(code)) {
+    const rawC = rawUnitCenter.get(code) || rawCityCenter.get(code);
+    const cand = rawC ? main(rawC).map(r2) : null;
+    if (cand && inBBox(cand, bbox)) {
+      seat = cand;
+    } else if (typeof tList[0]?.[5] === 'number' && typeof tList[0]?.[6] === 'number') {
+      seat = main([tList[0][5], tList[0][6]]).map(r2);
+    } else {
+      seat = label;
+    }
+  }
   return {
     code, name, short, province, city,
     ...toPinyin(short),
     d: isSansha(code) ? '' : toD(coarseByCode.get(code).geometry, main, 10),
     label: isSansha(code) ? null : label,
+    seat,
     bbox,
     area,
     center,
@@ -326,14 +350,23 @@ for (const p of provinces) {
   p.area = pUnits.reduce((s, u) => s + (u.area || 0), 0);
   p.center = geoCentroid(merged).map(r2);
   p.towns = pUnits.reduce((s, u) => s + (u.towns || 0), 0);
+  const pCities = cities.filter(c => c.province === p.code);
+  const capCity = pCities.find(c => c.code === p.code.slice(0, 2) + '0100') || pCities[0];
+  p.capital = capCity?.short || p.short;
+  p.capitalCode = capCity?.code || p.code;
+  const rawP = rawProvCenter.get(p.code);
+  p.seat = rawP ? main(rawP).map(r2) : p.label;
 }
 for (const c of cities) {
   const cUnits = unitsOut.filter(u => u.city === c.code);
   c.area = cUnits.reduce((s, u) => s + (u.area || 0), 0);
   c.towns = cUnits.reduce((s, u) => s + (u.towns || 0), 0);
+  const p = provinces.find(x => x.code === c.province);
+  if (p?.capitalCode === c.code) c.capital = true;
   if (c.code === SANSHA_CITY) {
     c.bbox = null;
     c.label = null;
+    c.seat = null;
     c.center = [112.35, 16.83];
     continue;
   }
@@ -345,6 +378,22 @@ for (const c of cities) {
   const largest = polys.reduce((a, b) => (ringArea(b[0]) > ringArea(a[0]) ? b : a));
   c.label = polylabel(largest, 0.1).map(r2);
   c.center = geoCentroid(cleaned).map(r2);
+  const rawC = rawCityCenter.get(c.code) || rawUnitCenter.get(c.code) || rawProvCenter.get(c.code);
+  c.seat = rawC ? main(rawC).map(r2) : (cUnits[0]?.seat || c.label);
+  if (cUnits.length > 1 && c.seat) {
+    let bestU = null, bestD = Infinity;
+    for (const u of cUnits) {
+      if (!u.seat) continue;
+      const d = Math.hypot(u.seat[0] - c.seat[0], u.seat[1] - c.seat[1]);
+      if (d < bestD) { bestD = d; bestU = u; }
+    }
+    if (bestU) {
+      bestU.capital = true;
+      if (/(自治州|地区|盟)$/.test(c.name) && bestU.short !== c.short) {
+        c.seatName = bestU.short;
+      }
+    }
+  }
 }
 
 // ---------- 5. 边界线（县界由各区县 path 自身描边绘制；市界、省界、国界单独提取）----------
