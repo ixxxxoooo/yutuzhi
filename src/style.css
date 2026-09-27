@@ -271,6 +271,40 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   font-weight: bold;
 }
 
+/* 侧栏名胜风物分类胶囊与名胜词条 */
+.spot-cats {
+  width: 100%; display: flex; flex-wrap: wrap; gap: 4px;
+  padding-bottom: 4px; margin-bottom: 2px; border-bottom: 1px dashed var(--divider);
+}
+#city-list .spot-cat {
+  padding: 2px 7px; font-size: 11.5px; border-radius: 99px;
+  border: 1.5px solid var(--divider); background: var(--soft); color: var(--muted);
+}
+#city-list .spot-cat.active {
+  background: var(--ink); color: #fff; border-color: var(--ink); font-weight: bold;
+}
+#city-list .spot-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #fffdf9;
+}
+.spot-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: #15803d;
+}
+.spot-chip[data-cat="heritage"] .spot-dot { background: #b91c1c; }
+.spot-chip[data-cat="water"] .spot-dot { background: #0369a1; }
+.spot-chip[data-cat="wonder"] .spot-dot { background: #b45309; }
+.spot-sep {
+  width: 100%; display: flex; align-items: center; gap: 6px;
+  margin: 4px 0 2px; font-size: 11px; color: var(--muted);
+}
+.spot-sep::after {
+  content: ''; flex: 1; border-bottom: 1px dashed var(--divider);
+}
+.spot-empty {
+  width: 100%; font-size: 12px; color: var(--muted); padding: 4px 2px;
+}
+
 /* 手机端面板把手（宽屏不显示） */
 .panel-handle { display: none; }
 
@@ -374,6 +408,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .layer-toggle.active .chk::after {
   content: ''; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px;
   border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.layer-cats {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  padding: 4px 6px 6px; border-radius: 7px; background: var(--soft); border: 1px dashed var(--divider);
+}
+.layer-cat {
+  padding: 3px 8px; font-size: 12px; border-radius: 99px;
+  border: 1.5px solid var(--ink); background: #fff;
+}
+.layer-cat.active {
+  background: var(--hl-fill); font-weight: bold;
 }
 
 /* ============ 地图四级视觉层级与悬停高亮 ============ */
@@ -812,6 +857,70 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 [data-basemap-dark][data-view="country"][data-city-points] .prov-labels text,
 [data-basemap-dark][data-view="province"][data-city-points] .city-labels text[data-seat-diff] {
   fill: rgba(255, 255, 255, .74);
+}
+
+/* ---------- 文旅名胜风物叠加图层 (.tourism-points) ---------- */
+.tourism-points { display: none; }
+[data-tourism] .tourism-points { display: inline; }
+.tp-item { cursor: pointer; }
+.tp-pin { transform: scale(var(--k, 1)); transition: transform .14s ease-out; }
+.tp-pin * { vector-effect: none !important; }
+.tp-hit { fill: transparent; }
+.tp-halo { fill: rgba(255, 255, 255, .95); }
+.tp-bg { fill: #15803d; stroke: #ffffff; stroke-width: 1px; }
+.tp-item[data-cat="heritage"] .tp-bg { fill: #b91c1c; }
+.tp-item[data-cat="water"] .tp-bg { fill: #0369a1; }
+.tp-item[data-cat="wonder"] .tp-bg { fill: #b45309; }
+.tp-icon { fill: #ffffff; stroke: none; pointer-events: none; }
+
+.tp-text {
+  font-size: 11.8px;
+  font-weight: bold;
+  dominant-baseline: central;
+  fill: #14532d;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, .95);
+  stroke-width: 3.4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.tp-item[data-cat="heritage"] .tp-text { fill: #7f1d1d; }
+.tp-item[data-cat="water"] .tp-text { fill: #0c4a6e; }
+.tp-item[data-cat="wonder"] .tp-text { fill: #78350f; }
+
+/* 悬停行政区或直接悬停名胜徽章时的高亮反馈 */
+.tp-item.hovered-region .tp-pin { transform: scale(calc(var(--k, 1) * 1.12)); }
+.tp-item.hovered-region .tp-halo { fill: var(--hl-fill); }
+.tp-item.hovered .tp-pin,
+.tp-item.selected .tp-pin { transform: scale(calc(var(--k, 1) * 1.28)); }
+.tp-item.hovered .tp-halo { fill: var(--hl-fill); stroke: var(--hl-border); stroke-width: 1.5px; }
+.tp-item.hovered .tp-text,
+.tp-item.selected .tp-text {
+  display: inline !important;
+  stroke: var(--hl-fill);
+}
+.tp-item.selected .tp-halo { fill: var(--sel-fill); stroke: var(--sel-border); stroke-width: 1.5px; }
+
+/* 开启名胜图层时，政区名称适度退后为温润背景，突出名胜风物徽章 */
+[data-view="country"][data-tourism] .prov-labels text {
+  fill: #6b6458;
+  font-size: calc(var(--prov-label-size, 12.5px) * .9);
+}
+[data-view="province"][data-tourism] .city-labels text,
+[data-view="city"][data-tourism] .labels text {
+  fill: #6b6458;
+}
+
+/* 暗色卫星底图下的名胜点位配色适配 */
+[data-basemap-dark] .tp-halo { fill: rgba(10, 16, 26, .92); }
+[data-basemap-dark] .tp-text { fill: #dcfce7; stroke: rgba(10, 16, 26, .94); }
+[data-basemap-dark] .tp-item[data-cat="heritage"] .tp-text { fill: #fecaca; }
+[data-basemap-dark] .tp-item[data-cat="water"] .tp-text { fill: #bae6fd; }
+[data-basemap-dark] .tp-item[data-cat="wonder"] .tp-text { fill: #fde68a; }
+[data-basemap-dark][data-view="country"][data-tourism] .prov-labels text,
+[data-basemap-dark][data-view="province"][data-tourism] .city-labels text,
+[data-basemap-dark][data-view="city"][data-tourism] .labels text {
+  fill: rgba(255, 255, 255, .68);
 }
 
 /* ---------- 地图导出预览弹窗 (#export-modal) ---------- */

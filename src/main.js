@@ -7,6 +7,7 @@ import {
   unitByCode, cityByCode, provinceByCode, getTownByCode, unitsOf, citiesOf, unitsOfCity, townsOfUnit,
   unitPath, cityPath, townPath, ensureProvinceCityLabels, ensureCityUnitLabels, ensureUnitTownLabels,
   ensureCountryCityPoints, ensureProvinceCityPoints, ensureCityUnitPoints, ensureUnitTownPoints,
+  ensureTourismPoints, spotsOfRegion, spotById, TOURISM_CATEGORIES,
   buildSanshaCard, SANSHA_CODES, isSansha, FULL_VIEW,
 } from './map.js';
 import { getRegionData } from './region-info.js';
@@ -150,13 +151,14 @@ const positionHoverCard = (clientX, clientY) => {
   hoverCard.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
 };
 
-// 渲染侧栏下辖行政区列表
+// 渲染侧栏下辖行政区列表（开启文旅名胜风物图层时置顶展示当前区域名胜与分类筛选）
 const renderSubList = () => {
+  let adminHtml = '';
   if (activeCounty) {
     const list = townsOfUnit(activeCounty);
     subTitle.textContent = `下辖乡镇与街道（${list.length}）`;
     subHint.textContent = '悬停着色 · 点击固定';
-    cityListEl.innerHTML = list.map(t => `
+    adminHtml = list.map(t => `
       <button type="button" data-type="town" data-code="${t.code}" class="${selectedTown === t.code ? 'selected' : ''}" title="${esc(t.name)}（${t.code}）">
         <span>${esc(t.name)}</span>
         <small>${t.area}km²</small>
@@ -166,7 +168,7 @@ const renderSubList = () => {
     const list = unitsOfCity(activeCity);
     subTitle.textContent = `下辖区县（${list.length}）`;
     subHint.textContent = '悬停着色 · 点击进入乡镇';
-    cityListEl.innerHTML = list.map(u => `
+    adminHtml = list.map(u => `
       <button type="button" data-type="unit" data-code="${u.code}" title="${esc(u.name)}（${u.towns || 0} 个乡镇街道）">
         <span>${esc(u.short)}</span>
         <small>${u.towns ? `${u.towns}镇街` : `${u.area}km²`}</small>
@@ -176,7 +178,7 @@ const renderSubList = () => {
     const list = citiesOf(activeProvince);
     subTitle.textContent = `下辖行政区（${list.length}）`;
     subHint.textContent = '悬停着色 · 点击进入';
-    cityListEl.innerHTML = list.map(c => {
+    adminHtml = list.map(c => {
       if (c.single) {
         const u = unitByCode.get(c.code);
         return `<button type="button" data-type="unit" data-code="${c.code}" title="${esc(c.name)}"><span>${esc(c.short)}</span><small>${u?.towns ? `${u.towns}镇街` : '直辖'}</small></button>`;
@@ -187,11 +189,51 @@ const renderSubList = () => {
   } else {
     subTitle.textContent = `省级行政区（${provinces.length}）`;
     subHint.textContent = '悬停着色 · 点击进入';
-    cityListEl.innerHTML = provinces.map(p => {
+    adminHtml = provinces.map(p => {
       const count = unitsOf(p.code).length;
       return `<button type="button" data-type="province" data-code="${p.code}" class="city-nav-btn" title="${esc(p.name)}（${p.single ? '省级' : `${count} 个区县`}）"><span>${esc(p.short)}</span><small>${p.single ? '省级' : `${count}县区`}</small></button>`;
     }).join('');
   }
+
+  if (root.dataset.tourism) {
+    const curCat = root.dataset.tourism || 'all';
+    const spots = spotsOfRegion({
+      activeProvince,
+      activeCity,
+      activeCounty,
+      category: curCat,
+      allTiersInCountry: false,
+    });
+    const scopeTitle = activeCounty ? '本县区名胜' : activeCity ? '本市名胜' : activeProvince ? '本省名胜风物' : '全国殿堂名胜';
+    subTitle.textContent = `${scopeTitle}（${spots.length}）`;
+    subHint.textContent = '悬停看图鉴 · 点击下钻';
+    const catsHtml = `
+      <div class="spot-cats" role="group" aria-label="名胜类别筛选">
+        ${TOURISM_CATEGORIES.map(c => `
+          <button type="button" class="spot-cat${curCat === c.id ? ' active' : ''}" data-tourism-cat="${c.id}">${c.short}</button>
+        `).join('')}
+      </div>
+    `;
+    const spotsHtml = spots.length
+      ? spots.map(s => {
+        const p = provinceByCode.get(s.prov);
+        const c = cityByCode.get(s.city);
+        const u = unitByCode.get(s.unit);
+        const loc = activeCounty
+          ? (s.worldHeritage ? '世遗' : '名胜')
+          : activeCity
+            ? (u?.short || '')
+            : activeProvince
+              ? (c && !c.single && !p?.direct ? c.short : (u?.short || ''))
+              : (p?.short || '');
+        return `<button type="button" class="spot-chip" data-type="spot" data-code="${s.id}" data-cat="${s.cat}" title="${esc(s.fullName)}（${esc(s.badge)}）"><i class="spot-dot"></i><span>${esc(s.name)}</span><small>${esc(loc)}</small></button>`;
+      }).join('')
+      : '<span class="spot-empty">当前筛选类别在此区域暂无收录名胜</span>';
+    cityListEl.innerHTML = `${catsHtml}${spotsHtml}<div class="spot-sep"><span>下辖政区导航</span></div>${adminHtml}`;
+    return;
+  }
+
+  cityListEl.innerHTML = adminHtml;
 };
 
 const syncListHover = target => {
@@ -219,9 +261,13 @@ const updateHover = (target, clientX = 0, clientY = 0, showFloating = false) => 
   }
 };
 
-// 根据当前视图层级，解析鼠标所在的 path 对应的交互块（省 / 市 / 区县 / 乡镇）
+// 根据当前视图层级，解析鼠标所在的节点对应的交互目标（名胜点位 / 省 / 市 / 区县 / 乡镇）
 const resolveMapTarget = targetEl => {
   if (!targetEl) return null;
+  const tpEl = targetEl.closest('.tp-item');
+  if (tpEl && root.dataset.tourism) {
+    return { type: 'spot', code: tpEl.dataset.spot, isNeighbor: false };
+  }
   const townEl = targetEl.closest('.town');
   if (townEl && activeCounty) {
     return { type: 'town', code: townEl.dataset.town, isNeighbor: false };
@@ -337,10 +383,18 @@ cityListEl.addEventListener('pointerleave', () => {
 });
 
 cityListEl.addEventListener('click', e => {
+  const catBtn = e.target.closest('button[data-tourism-cat]');
+  if (catBtn) {
+    basemap.setOverlay('tourismCat', catBtn.dataset.tourismCat);
+    layerUI.sync();
+    return;
+  }
   const b = e.target.closest('button[data-type][data-code]');
   if (!b) return;
   const { type, code } = b.dataset;
-  if (type === 'province') {
+  if (type === 'spot') {
+    handleSpotActivate(code, false);
+  } else if (type === 'province') {
     const p = provinceByCode.get(code);
     if (p.single) {
       updateHover({ type: 'province', code, isNeighbor: false });
@@ -522,7 +576,92 @@ const layoutActiveCityPoints = view => {
   }
 };
 
-// 省视图地级市名布局 / 市视图区县名布局 / 区县视图乡镇名布局 + 城市驻地位置布局
+// 文旅名胜风物坐标点避让布局（与行政区标签及城市驻地共享碰撞检测）
+const layoutActiveTourismPoints = view => {
+  if (!root.dataset.tourism || !view) return;
+  const curCat = root.dataset.tourism || 'all';
+  const g = ensureTourismPoints(svg, { activeProvince, activeCity, activeCounty, category: curCat });
+  if (!g) return;
+
+  const upp = unitsPerPixel(svg, view);
+  const k = 1 / upp;
+  const { left = 0, top = 0, right = 0, bottom = 0 } = viewInsets();
+  const { width, height } = svgRect(svg);
+  const bounds = {
+    x0: left + LABEL_INSET,
+    y0: top + LABEL_INSET,
+    x1: width - right - LABEL_INSET,
+    y1: height - bottom - LABEL_INSET,
+  };
+  const showPolyLabels = !root.dataset.hideLabels;
+  const obstacles = [];
+
+  if (!activeProvince && showPolyLabels) {
+    const zoomed = home && home[2] / view[2] >= PROV_LABEL_ZOOM;
+    const pFont = zoomed ? PROV_LABEL_PX : PROV_LABEL_BASE_PX;
+    for (const p of provinces) {
+      if (!p.label) continue;
+      const lx = (p.label[0] - view[0]) * k;
+      const ly = (p.label[1] - view[1]) * k;
+      const w = p.short.length * pFont * 0.94 + 4;
+      const h = pFont + 3;
+      obstacles.push({ x0: lx - w / 2, x1: lx + w / 2, y0: ly - h / 2, y1: ly + h / 2 });
+    }
+  }
+
+  // 若同时开启了城市驻地点位，将驻地图标与文字作为障碍盒避免互相覆盖
+  if (root.dataset.cityPoints) {
+    for (const cp of svg.querySelectorAll('.city-points .cp-group.active .cp-item')) {
+      const m = cp.getAttribute('transform')?.match(/translate\(([-\d.]+),\s*([-\d.]+)\)/);
+      if (!m) continue;
+      const cx = (Number(m[1]) - view[0]) * k;
+      const cy = (Number(m[2]) - view[1]) * k;
+      obstacles.push({ x0: cx - 7, x1: cx + 7, y0: cy - 7, y1: cy + 7 });
+      const txt = cp.querySelector('.cp-text');
+      if (txt && !txt.hasAttribute('hidden')) {
+        const dx = Number(txt.getAttribute('x') || 8);
+        const dy = Number(txt.getAttribute('y') || 0);
+        const anchor = txt.getAttribute('text-anchor') || 'start';
+        const tw = (txt.textContent?.length || 2) * 12 + 4;
+        const ax = anchor === 'end' ? -1 : anchor === 'middle' ? -0.5 : 0;
+        const x0 = cx + dx + ax * tw;
+        obstacles.push({ x0, x1: x0 + tw, y0: cy + dy - 7, y1: cy + dy + 7 });
+      }
+    }
+  }
+
+  const spots = spotsOfRegion({ activeProvince, activeCity, activeCounty, category: curCat });
+  const points = spots.map(s => ({
+    code: s.id,
+    text: s.name,
+    seat: s.pos,
+    tier: s.tier === 1 ? 'country' : 'province',
+    priority: (s.tier === 1 ? 500000 : 10000) + (s.worldHeritage ? 50000 : 0),
+  }));
+
+  const placedMap = layoutCityPoints({
+    points,
+    obstacles,
+    view: { vx: view[0], vy: view[1], k },
+    bounds,
+    base: activeProvince ? 12.2 : 11.5,
+  });
+
+  for (const item of g.querySelectorAll('.tp-item')) {
+    const code = item.dataset.spot;
+    const layout = placedMap.get(code);
+    const txt = item.querySelector('.tp-text');
+    if (!txt || !layout) continue;
+    txt.setAttribute('x', String(layout.dx));
+    txt.setAttribute('y', String(layout.dy));
+    txt.setAttribute('text-anchor', layout.anchor);
+    txt.style.fontSize = `${layout.fontSize}px`;
+    if (layout.showText) txt.removeAttribute('hidden');
+    else txt.setAttribute('hidden', '');
+  }
+};
+
+// 省视图地级市名布局 / 市视图区县名布局 / 区县视图乡镇名布局 + 城市驻地与文旅名胜位置布局
 const layoutActiveLabels = view => {
   if (activeCounty) {
     const g = ensureUnitTownLabels(svg, activeCounty);
@@ -535,6 +674,7 @@ const layoutActiveLabels = view => {
     applyGroupLabels(g, citiesOf(activeProvince).filter(c => c.bbox && c.label), cityPath, view);
   }
   layoutActiveCityPoints(view);
+  layoutActiveTourismPoints(view);
 };
 
 // 全国视图显示清晰的矢量省名（未放大时隐藏极小重叠区域，放大后全部展开）
@@ -558,6 +698,7 @@ const basemap = createBasemap({
   svg,
   onStateChange: () => {
     syncDetail();
+    renderSubList();
     if (home) layoutActiveLabels(flyingTarget ?? currentView(svg));
   },
 });
@@ -883,6 +1024,39 @@ const goUp = () => {
   }
 };
 
+// 点击或搜索选中某处名胜风物时：逐级下钻飞入其所属省 → 市 → 区县并展示图鉴
+const handleSpotActivate = (spotId, fromSearch = false) => {
+  const s = spotById.get(spotId);
+  if (!s) return;
+  if (fromSearch && !root.dataset.tourism) {
+    basemap.setOverlay('tourismOverlay', true);
+    layerUI.sync();
+  }
+  const p = provinceByCode.get(s.prov);
+  if (!activeProvince || activeProvince !== s.prov) {
+    if (p?.single) {
+      updateHover({ type: 'spot', code: s.id, isNeighbor: false });
+      return;
+    }
+    goProvince(s.prov);
+    return;
+  }
+  if (!activeCity || activeCity !== s.city) {
+    const c = cityByCode.get(s.city);
+    if (c?.single || p?.direct) {
+      goCounty(s.unit);
+      return;
+    }
+    goCity(s.city);
+    return;
+  }
+  if (!activeCounty || activeCounty !== s.unit) {
+    goCounty(s.unit);
+    return;
+  }
+  updateHover({ type: 'spot', code: s.id, isNeighbor: false });
+};
+
 // 复位到当前视图的完整范围
 const resetView = () => {
   applySelectedTown(null);
@@ -911,6 +1085,7 @@ const locator = createLocator({
   onUnit: code => goCounty(code),
   onCity: code => goCity(code),
   onProvince: code => goProvince(code),
+  onSpot: spotId => handleSpotActivate(spotId, true),
   getActiveProvince: () => activeProvince,
   getActiveCity: () => activeCity,
   getActiveCounty: () => activeCounty,
@@ -992,6 +1167,12 @@ svg.addEventListener('click', e => {
   e.stopPropagation();
   if (locator.isOpen()) return locator.close();
   if (layerUI.isOpen()) return layerUI.close();
+
+  const tpEl = e.target.closest('.tp-item');
+  if (tpEl && root.dataset.tourism) {
+    handleSpotActivate(tpEl.dataset.spot, false);
+    return;
+  }
 
   const townEl = e.target.closest('.town');
   if (townEl && activeCounty) {

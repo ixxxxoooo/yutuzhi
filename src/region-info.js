@@ -5,8 +5,15 @@ import {
   provinces, units,
   provinceByCode, cityByCode, unitByCode,
   citiesOf, unitsOf, unitsOfCity, townsOfUnit,
-  getTownByCode,
+  getTownByCode, spotById,
 } from './map.js';
+
+const SPOT_CAT_LABELS = {
+  nature: '自然山岳',
+  heritage: '人文古迹',
+  water: '湖海秀水',
+  wonder: '博物奇观',
+};
 
 // ---------- 常量 ----------
 const DIRECT_SET = new Set(['110000', '120000', '310000', '500000']);
@@ -294,6 +301,31 @@ export const getRegionData = (target, { activeCounty = null } = {}) => {
       ],
       foot: `四级完整路径：${hierarchy} › ${t.name}`,
       actionHint: '点击可固定/取消固定该乡镇街道信息',
+    };
+  }
+
+  if (target.type === 'spot') {
+    const s = spotById.get(target.code);
+    if (!s) return null;
+    const p = provinceByCode.get(s.prov);
+    const c = cityByCode.get(s.city);
+    const u = unitByCode.get(s.unit);
+    const hierarchy = c && !c.single && !p?.direct
+      ? `${p?.name || ''} › ${c.name} › ${u?.name || ''}`
+      : `${p?.name || ''}${u && u.code !== p?.code ? ` › ${u.name}` : ''}`;
+    return {
+      title: s.name,
+      badge: s.badge,
+      code: u?.code || s.prov,
+      sub: `${s.fullName} · ${hierarchy}`,
+      stats: [
+        { label: '所属区县', value: u?.name || p?.name || '—', note: c && !c.single && !p?.direct ? `${p?.short} · ${c.short}` : (p?.name || '') },
+        { label: '景观分类', value: SPOT_CAT_LABELS[s.cat] || '名胜风物', note: s.worldHeritage ? '世界遗产名录' : '国家级风景名胜' },
+        { label: '最佳时节', value: s.season, note: '推荐游览窗口' },
+        { label: '政区代码', value: u?.code || s.prov, note: u?.center ? formatCoord(u.center) : `拼音：${s.py}` },
+      ],
+      foot: `风物志：${s.blurb}`,
+      actionHint: `${s.blurb}（点击飞入所属政区）`,
     };
   }
   return null;

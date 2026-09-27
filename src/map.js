@@ -5,6 +5,9 @@ import { outerBoundaryD } from './geometry.js';
 import { TONE_COUNT, extractPathVerts, assignTones } from './topo-color.js';
 import { SET_DETAIL_BATCH } from './constants.js';
 import { computeTownCells } from './voronoi-core.js';
+import { TOURISM_CATEGORIES, TOURISM_SPOTS, spotById, filterSpots } from './tourism-data.js';
+
+export { TOURISM_CATEGORIES, TOURISM_SPOTS, spotById, filterSpots };
 
 const NS = 'http://www.w3.org/2000/svg';
 const INSET_RADIUS = 6; // 南海插图卡片圆角（viewBox 单位，全国视图下约 5～8px）
@@ -385,7 +388,19 @@ const syncHighlightLayer = svg => {
   refs.activeHalo?.setAttribute('d', activeD);
   refs.activeOutline?.setAttribute('d', activeD);
 
-  const hoverD = currentHover ? getOutline(currentHover.type, currentHover.code, detail) : '';
+  let hoverD = '';
+  if (currentHover) {
+    if (currentHover.type === 'spot') {
+      const sp = spotById.get(currentHover.code);
+      if (sp) {
+        if (currentActive.viewMode === 'country') hoverD = getOutline('province', sp.prov, detail);
+        else if (currentActive.viewMode === 'province') hoverD = getOutline('city', sp.city, detail);
+        else hoverD = getOutline('unit', sp.unit, detail);
+      }
+    } else {
+      hoverD = getOutline(currentHover.type, currentHover.code, detail);
+    }
+  }
   refs.hoverGlow?.setAttribute('d', hoverD);
   refs.hoverHalo?.setAttribute('d', hoverD);
   refs.hoverOutline?.setAttribute('d', hoverD);
@@ -412,23 +427,46 @@ export const setHover = (svg, target) => {
     currentHover?.code === target?.code &&
     Boolean(currentHover?.isNeighbor) === Boolean(target?.isNeighbor)
   ) return false;
-  for (const el of svg.querySelectorAll('.hovered, .hovered-neighbor')) {
-    el.classList.remove('hovered', 'hovered-neighbor');
+  for (const el of svg.querySelectorAll('.hovered, .hovered-neighbor, .hovered-region')) {
+    el.classList.remove('hovered', 'hovered-neighbor', 'hovered-region');
   }
   currentHover = target;
   if (target) {
     const cls = target.isNeighbor ? 'hovered-neighbor' : 'hovered';
-    if (target.type === 'province') {
+    if (target.type === 'spot') {
+      svg.querySelector(`.tourism-points .tp-item[data-spot="${target.code}"]`)?.classList.add('hovered');
+      const sp = spotById.get(target.code);
+      if (sp) {
+        if (currentActive.viewMode === 'country') {
+          svg.querySelector(`.prov[data-province="${sp.prov}"]`)?.classList.add('hovered-neighbor');
+        } else if (currentActive.viewMode === 'province') {
+          svg.querySelector(`.city[data-city="${sp.city}"]`)?.classList.add('hovered-neighbor');
+        } else {
+          for (const node of svg.querySelectorAll(`.unit[data-code="${sp.unit}"]`)) {
+            node.classList.add('hovered-neighbor');
+          }
+        }
+      }
+    } else if (target.type === 'province') {
       svg.querySelector(`.prov[data-province="${target.code}"]`)?.classList.add(cls);
       svg.querySelector(`.city-points .cp-country .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
+      for (const node of svg.querySelectorAll(`.tourism-points .tp-item[data-prov="${target.code}"]`)) {
+        node.classList.add('hovered-region');
+      }
     } else if (target.type === 'city') {
       svg.querySelector(`.city[data-city="${target.code}"]`)?.classList.add(cls);
       svg.querySelector(`.city-points .cp-province.active .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
+      for (const node of svg.querySelectorAll(`.tourism-points .tp-item[data-city="${target.code}"]`)) {
+        node.classList.add('hovered-region');
+      }
     } else if (target.type === 'unit') {
       for (const node of svg.querySelectorAll(`.unit[data-code="${target.code}"]`)) {
         node.classList.add(cls);
       }
       svg.querySelector(`.city-points .cp-group.active .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
+      for (const node of svg.querySelectorAll(`.tourism-points .tp-item[data-unit="${target.code}"]`)) {
+        node.classList.add('hovered-region');
+      }
     } else if (target.type === 'town') {
       svg.querySelector(`.town[data-town="${target.code}"]`)?.classList.add(cls);
       svg.querySelector(`.city-points .cp-county.active .cp-item[data-code="${target.code}"]`)?.classList.add(cls);
@@ -449,6 +487,8 @@ export const setSelected = (svg, target) => {
   } else if (target?.type === 'town') {
     svg.querySelector(`.town[data-town="${target.code}"]`)?.classList.add('selected');
     svg.querySelector(`.city-points .cp-county.active .cp-item[data-code="${target.code}"]`)?.classList.add('selected');
+  } else if (target?.type === 'spot') {
+    svg.querySelector(`.tourism-points .tp-item[data-spot="${target.code}"]`)?.classList.add('selected');
   }
   syncHighlightLayer(svg);
 };
@@ -703,6 +743,84 @@ export const ensureUnitTownPoints = (svg, unitCode) => {
   return g;
 };
 
+// ---------- 文旅名胜风物图层 (.tourism-points) ----------
+const TOURISM_ICON_D = {
+  // 自然山岳：双峰山峦纹
+  nature: 'M-3.2,2.1L-0.9,-2.4L0.6,0.4L1.6,-1.2L3.2,2.1Z',
+  // 人文古迹：传统飞檐殿宇纹
+  heritage: 'M-3.3,-0.4L0,-2.7L3.3,-0.4L2.2,-0.4L2.2,2.2L-2.2,2.2L-2.2,-0.4Z',
+  // 湖海秀水：风帆碧波纹
+  water: 'M-2.7,1.9L0,-2.6L2.7,0.9L-0.3,0.9L-0.3,1.9Z',
+  // 博物奇观：璀璨四芒星徽
+  wonder: 'M0,-3.2L1,-1L3.2,0L1,1L0,3.2L-1,1L-3.2,0L-1,-1Z',
+};
+
+export const spotsOfRegion = ({
+  activeProvince = null,
+  activeCity = null,
+  activeCounty = null,
+  category = 'all',
+  allTiersInCountry = false,
+} = {}) => {
+  let list = TOURISM_SPOTS;
+  if (activeCounty) {
+    list = list.filter(s => s.unit === activeCounty);
+  } else if (activeCity) {
+    const p = provinceByCode.get(activeProvince);
+    list = p?.direct
+      ? list.filter(s => s.prov === activeProvince)
+      : list.filter(s => s.city === activeCity);
+  } else if (activeProvince) {
+    list = list.filter(s => s.prov === activeProvince);
+  } else if (!allTiersInCountry) {
+    // 全国视图：当用户筛选单一细分品类时展示该品类全部点位；默认“全部”时精选 tier=1 殿堂级地标避免拥挤
+    list = category && category !== 'all' ? list : list.filter(s => s.tier === 1);
+  }
+  return filterSpots(list, category);
+};
+
+export const ensureTourismPoints = (svg, {
+  activeProvince = null,
+  activeCity = null,
+  activeCounty = null,
+  category = 'all',
+} = {}) => {
+  const layer = svg.querySelector(':scope > .tourism-points');
+  if (!layer) return null;
+  const scopeKey = `${activeCounty || activeCity || activeProvince || 'country'}:${category}`;
+  let g = layer.querySelector('g.tp-group');
+  if (g && g.dataset.scope === scopeKey) return g;
+  layer.replaceChildren();
+  g = el('g', { class: 'tp-group active', 'data-scope': scopeKey }, layer);
+  const spots = spotsOfRegion({ activeProvince, activeCity, activeCounty, category });
+  // tier=2 先画，tier=1 殿堂级地标后画在顶层
+  const ordered = [...spots].sort((a, b) => b.tier - a.tier);
+  for (const s of ordered) {
+    const item = el('g', {
+      class: 'tp-item',
+      transform: `translate(${s.pos[0]}, ${s.pos[1]})`,
+      'data-spot': s.id,
+      'data-cat': s.cat,
+      'data-tier': String(s.tier),
+      'data-prov': s.prov,
+      'data-city': s.city,
+      'data-unit': s.unit,
+      ...(s.worldHeritage ? { 'data-world': '1' } : {}),
+    }, g);
+    const pin = el('g', { class: 'tp-pin' }, item);
+    el('circle', { class: 'tp-hit', r: '10' }, pin);
+    el('circle', { class: 'tp-halo', r: s.tier === 1 ? '6.6' : '5.8' }, pin);
+    el('circle', { class: 'tp-bg', r: s.tier === 1 ? '5.2' : '4.5' }, pin);
+    el('path', { class: 'tp-icon', d: TOURISM_ICON_D[s.cat] || TOURISM_ICON_D.nature }, pin);
+    el('text', {
+      class: 'tp-text',
+      x: s.tier === 1 ? '8.2' : '7.4',
+      y: '0',
+    }, pin).textContent = s.name;
+  }
+  return g;
+};
+
 // 构建地图
 export const buildMap = (svg, { withLabels = true } = {}) => {
   svg.setAttribute('viewBox', FULL_VIEW.join(' '));
@@ -801,6 +919,8 @@ export const buildMap = (svg, { withLabels = true } = {}) => {
     // 城市/省会/治所驻地坐标图层
     el('g', { class: 'city-points' }, svg);
     ensureCountryCityPoints(svg);
+    // 文旅名胜风物坐标图层
+    el('g', { class: 'tourism-points' }, svg);
   }
 
   // 南海诸岛插图：迷你卡片

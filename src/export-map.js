@@ -3,11 +3,18 @@ import {
   FULL_VIEW, provinceView, cityView, unitView,
   provinces, citiesOf, unitsOfCity, townsOfUnit,
   unitPath, cityPath, townPath,
-  provinceByCode, cityByCode, unitByCode,
+  provinceByCode, cityByCode, unitByCode, spotsOfRegion,
 } from './map.js';
 import { layoutLabels, leaderEnd, layoutCityPoints } from './label-layout.js';
 
 const FONT = '"CityEx Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
+const TOURISM_COLORS = {
+  nature: '#15803d',
+  heritage: '#b91c1c',
+  water: '#0369a1',
+  wonder: '#b45309',
+};
 
 export const getSaveButtonLabel = ({ activeProvince, activeCity, activeCounty }) => {
   if (activeCounty) {
@@ -92,6 +99,23 @@ const drawCityPointMarker = (ctx, px, py, tier) => {
   }
 };
 
+const drawTourismMarker = (ctx, px, py, cat, tier) => {
+  const color = TOURISM_COLORS[cat] || '#15803d';
+  const r = tier === 1 ? 5.2 : 4.5;
+  ctx.beginPath();
+  ctx.arc(px, py, r + 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(px, py, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(px, py, 2.1, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+};
+
 // 将当前 #map 的矢量图层内联计算样式并光栅化为指定宽高与 viewBox 的图像
 const renderSvgGeometryToImage = (liveSvg, box, width, height, scale, hideInset) => new Promise((resolve, reject) => {
   const root = document.documentElement;
@@ -106,8 +130,8 @@ const renderSvgGeometryToImage = (liveSvg, box, width, height, scale, hideInset)
   clone.setAttribute('width', String(width));
   clone.setAttribute('height', String(height));
 
-  // 移除文字、引线、城市点位与未使用的占位节点（文字与点位稍后在 Canvas 上使用 CityEx Sans 高清绘制）
-  for (const q of ['.prov-labels', '.city-labels', '.labels', '.town-labels', '.city-points', '.hover-layer', '.line-county']) {
+  // 移除文字、引线、城市点位、名胜点位与未使用的占位节点（稍后在 Canvas 上使用 CityEx Sans 高清绘制）
+  for (const q of ['.prov-labels', '.city-labels', '.labels', '.town-labels', '.city-points', '.tourism-points', '.hover-layer', '.line-county']) {
     clone.querySelector(q)?.remove();
   }
   if (hideInset) {
@@ -485,6 +509,48 @@ export const generateMapPoster = async ({
       ctx.strokeText(p.text, mapX + sx + layout.dx, mapY + sy + layout.dy);
       ctx.fillStyle = isCap ? '#991b1b' : '#1e293b';
       ctx.fillText(p.text, mapX + sx + layout.dx, mapY + sy + layout.dy);
+    }
+  }
+
+  // 若开启文旅名胜风物图层，绘制名胜徽章与避让后的名称
+  const tourismCat = document.documentElement.dataset.tourism;
+  if (tourismCat) {
+    const spots = spotsOfRegion({ activeProvince, activeCity, activeCounty, category: tourismCat });
+    const tPoints = spots.map(sp => ({
+      code: sp.id,
+      text: sp.name,
+      seat: sp.pos,
+      cat: sp.cat,
+      rawTier: sp.tier,
+      tier: sp.tier === 1 ? 'country' : 'province',
+      priority: (sp.tier === 1 ? 500000 : 10000) + (sp.worldHeritage ? 50000 : 0),
+    }));
+    const placedSpots = layoutCityPoints({
+      points: tPoints,
+      obstacles,
+      view: viewObj,
+      bounds: boundsObj,
+      base: isCountry ? 11.5 : 12.5,
+    });
+    for (const sp of tPoints) {
+      const sx = (sp.seat[0] - viewObj.vx) * viewObj.k;
+      const sy = (sp.seat[1] - viewObj.vy) * viewObj.k;
+      drawTourismMarker(ctx, mapX + sx, mapY + sy, sp.cat, sp.rawTier);
+    }
+    ctx.lineJoin = 'round';
+    ctx.textBaseline = 'middle';
+    for (const sp of tPoints) {
+      const layout = placedSpots.get(sp.code);
+      if (!layout || !layout.showText) continue;
+      const sx = (sp.seat[0] - viewObj.vx) * viewObj.k;
+      const sy = (sp.seat[1] - viewObj.vy) * viewObj.k;
+      ctx.font = `bold ${layout.fontSize}px ${FONT}`;
+      ctx.textAlign = layout.anchor === 'end' ? 'right' : layout.anchor === 'middle' ? 'center' : 'left';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.strokeText(sp.text, mapX + sx + layout.dx, mapY + sy + layout.dy);
+      ctx.fillStyle = TOURISM_COLORS[sp.cat] || '#15803d';
+      ctx.fillText(sp.text, mapX + sx + layout.dx, mapY + sy + layout.dy);
     }
   }
   ctx.restore();

@@ -2,7 +2,7 @@
 // @author ygw
 import {
   provinces, provinceByCode, cities, cityByCode, citiesOf, units, unitByCode, unitsOf, unitsOfCity,
-  getRawTowns, getTownsIndex, loadTownsIndex, loadTownsForProvince,
+  getRawTowns, getTownsIndex, loadTownsIndex, loadTownsForProvince, TOURISM_SPOTS,
 } from './map.js';
 import { esc, narrowScreen, debounce } from './dom.js';
 import { SEARCH_DEBOUNCE_MS } from './constants.js';
@@ -31,7 +31,7 @@ const score = (item, q) => {
 };
 
 /**
- * 四级全文检索
+ * 四级全文检索 + 文旅名胜风物检索
  * @param {string} q - 查询词
  * @returns {Array}
  */
@@ -53,6 +53,11 @@ export const search = q => {
   for (const u of units) {
     const s = score(u, q);
     if (s >= 0) hits.push({ item: u, s });
+  }
+
+  for (const sp of TOURISM_SPOTS) {
+    const s = score({ code: sp.unit, name: sp.fullName, short: sp.name, py: sp.py, pi: sp.pi }, q);
+    if (s >= 0) hits.push({ item: { ...sp, isSpot: true }, s: s + 0.25 });
   }
 
   // 乡镇：优先用轻量搜索索引；未加载时回退到已加载省级分片
@@ -87,7 +92,7 @@ export const search = q => {
   return hits.sort((a, b) => a.s - b.s).map(h => h.item);
 };
 
-export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, getActiveProvince, getActiveCity, getActiveCounty }) => {
+export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, onSpot, getActiveProvince, getActiveCity, getActiveCounty }) => {
   const input = box.querySelector('input');
   const topbar = box.closest('#topbar');
   const body = panel.querySelector('.locator-body');
@@ -163,6 +168,15 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
           const prov = provinceByCode.get(h.province);
           return `<button data-view-city="${h.cityCode}"><b>${esc(h.name)}</b><small>${esc(prov.short)} · ${unitsOfCity(h.cityCode).length} 县区 · ${h.cityCode}</small></button>`;
         }
+        if (h.isSpot) {
+          const prov = provinceByCode.get(h.prov);
+          const city = cityByCode.get(h.city);
+          const u = unitByCode.get(h.unit);
+          const loc = city && !city.single && !prov?.direct
+            ? `${prov?.short || ''} · ${city.short} · ${u?.short || ''}`
+            : `${prov?.short || ''}${u && u.code !== prov?.code ? ` · ${u.short}` : ''}`;
+          return `<button data-spot="${h.id}"><b>${esc(h.name)}</b><small>名胜 · ${esc(loc)} · ${esc(h.badge)}</small></button>`;
+        }
         if (h.isTown) {
           const u = unitByCode.get(h.unitCode);
           const prov = provinceByCode.get(u.province);
@@ -175,7 +189,7 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
         const loc = city && !city.single && !prov.direct ? `${prov.short} · ${city.short}` : prov.short;
         return `<button data-unit="${h.code}"><b>${esc(h.name)}</b><small>${esc(loc)} · ${h.towns ? `${h.towns}镇街 · ` : ''}${h.code}</small></button>`;
       }).join('')}</div>`
-      : '<p class="loc-empty">没有找到，试试省、市、区县、乡镇街道名、拼音或区划代码</p>';
+      : '<p class="loc-empty">没有找到，试试省、市、区县、乡镇街道、名胜景区名、拼音或区划代码</p>';
   };
 
   const render = () => {
@@ -243,7 +257,7 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
     else render();
   });
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') body.querySelector('button[data-town], button[data-unit], button[data-view-city], button[data-view-province], button[data-county-drill], button[data-city-drill], button[data-prov-drill]')?.click();
+    if (e.key === 'Enter') body.querySelector('button[data-spot], button[data-town], button[data-unit], button[data-view-city], button[data-view-province], button[data-county-drill], button[data-city-drill], button[data-prov-drill]')?.click();
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       body.querySelector('button')?.focus();
@@ -317,6 +331,9 @@ export const createLocator = ({ box, panel, onTown, onUnit, onCity, onProvince, 
     } else if (b.dataset.town) {
       close();
       onTown(b.dataset.town, b.dataset.townUnit);
+    } else if (b.dataset.spot) {
+      close();
+      onSpot?.(b.dataset.spot);
     }
   });
 

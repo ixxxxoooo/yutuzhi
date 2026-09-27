@@ -1,5 +1,6 @@
 // 真实地图底图与图层控制：将 Web Mercator (EPSG:3857) 瓦片实时重投影到与 SVG 完全一致的 Albers 等积圆锥坐标系
 // 支持 WebGL 硬件加速网格渲染（无接缝、60fps 缩放平移）与父级瓦片兜底（缩放加载时不闪白）
+import { TOURISM_CATEGORIES } from './tourism-data.js';
 
 const DEG = Math.PI / 180;
 const PHI0 = 25 * DEG;
@@ -316,6 +317,8 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
     basemap: 'paper',
     roadOverlay: false,
     cityPoints: false,
+    tourismOverlay: false,
+    tourismCat: 'all',
     countyGrid: false,
     showLabels: true,
     fillAlpha: 0.65,
@@ -351,6 +354,8 @@ export const createBasemap = ({ canvas, svg, onStateChange }) => {
     }
     if (state.cityPoints) root.dataset.cityPoints = '1';
     else delete root.dataset.cityPoints;
+    if (state.tourismOverlay) root.dataset.tourism = state.tourismCat || 'all';
+    else delete root.dataset.tourism;
     if (state.countyGrid) root.dataset.countyGrid = '1';
     else delete root.dataset.countyGrid;
     if (!state.showLabels) root.dataset.hideLabels = '1';
@@ -589,10 +594,11 @@ export const createLayerUI = ({ button, menu, basemap }) => {
     const st = basemap.getState();
     const bm = basemapById.get(st.basemap) ?? BASEMAPS[0];
     labelEl.textContent = bm.id === 'paper' ? '图层' : `图层 · ${bm.name}`;
-    button.classList.toggle('layer-active', bm.id !== 'paper' || st.countyGrid || st.cityPoints);
+    button.classList.toggle('layer-active', bm.id !== 'paper' || st.countyGrid || st.cityPoints || st.tourismOverlay);
     if (menu.hidden) return;
 
     const canRoadOverlay = bm.id === 'satellite' || bm.id === 'shaded' || bm.id === 'topo';
+    const curCat = st.tourismCat || 'all';
     menu.innerHTML = `
       <div class="layer-sec">
         <h3>地图底图</h3>
@@ -608,6 +614,17 @@ export const createLayerUI = ({ button, menu, basemap }) => {
       <div class="layer-sec">
         <h3>叠加图层</h3>
         <div class="layer-toggles">
+          <button type="button" class="layer-toggle${st.tourismOverlay ? ' active' : ''}" data-toggle="tourismOverlay" aria-pressed="${st.tourismOverlay}">
+            <span>文旅名胜风物<small>世界遗产 · 5A景区 · 名山秀水四级导览</small></span>
+            <i class="chk"></i>
+          </button>
+          ${st.tourismOverlay ? `
+            <div class="layer-cats" role="group" aria-label="名胜类别筛选">
+              ${TOURISM_CATEGORIES.map(c => `
+                <button type="button" class="layer-cat${curCat === c.id ? ' active' : ''}" data-tourism-cat="${c.id}" aria-pressed="${curCat === c.id}">${c.name}</button>
+              `).join('')}
+            </div>
+          ` : ''}
           <button type="button" class="layer-toggle${st.cityPoints ? ' active' : ''}" data-toggle="cityPoints" aria-pressed="${st.cityPoints}">
             <span>城市与省会位置<small>全国显示省会 · 省视图显示各市 · 市县显示治所</small></span>
             <i class="chk"></i>
@@ -657,6 +674,12 @@ export const createLayerUI = ({ button, menu, basemap }) => {
     const bmBtn = e.target.closest('button[data-bm]');
     if (bmBtn) {
       basemap.setBasemap(bmBtn.dataset.bm);
+      syncUI();
+      return;
+    }
+    const catBtn = e.target.closest('button[data-tourism-cat]');
+    if (catBtn) {
+      basemap.setOverlay('tourismCat', catBtn.dataset.tourismCat);
       syncUI();
       return;
     }

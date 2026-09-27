@@ -1,8 +1,9 @@
-// 搜索评分、拓扑着色与城市驻地点位排版单元测试
+// 搜索评分、拓扑着色、城市驻地与文旅名胜图层单元测试
 // @author ygw
 import { describe, it, expect } from 'vitest';
 import { assignTones, shareVertices, extractPathVerts, TONE_COUNT } from '../src/topo-color.js';
 import { layoutCityPoints } from '../src/label-layout.js';
+import { TOURISM_SPOTS, TOURISM_CATEGORIES, filterSpots, spotById } from '../src/tourism-data.js';
 
 describe('topo-color', () => {
   it('TONE_COUNT 为 6', () => {
@@ -93,3 +94,33 @@ describe('layoutCityPoints', () => {
     expect(bj.dx).toBeLessThanOrEqual(0);
   });
 });
+
+describe('tourism-data', () => {
+  it('覆盖全国 34 个省级行政区且每个点位具备合法 SVG 坐标与分类', () => {
+    expect(TOURISM_SPOTS.length).toBeGreaterThanOrEqual(180);
+    expect(TOURISM_CATEGORIES.length).toBe(6);
+    const provs = new Set(TOURISM_SPOTS.map(s => s.prov));
+    expect(provs.size).toBe(34);
+    for (const s of TOURISM_SPOTS) {
+      expect(s.pos).toHaveLength(2);
+      expect(s.pos[0]).toBeGreaterThan(0);
+      expect(s.pos[1]).toBeGreaterThan(0);
+      expect(['nature', 'heritage', 'water', 'wonder']).toContain(s.cat);
+      expect(spotById.get(s.id)).toBe(s);
+    }
+  });
+
+  it('filterSpots 支持世界遗产与四大分类过滤', () => {
+    const allSpots = filterSpots(TOURISM_SPOTS, 'all');
+    expect(allSpots.length).toBe(TOURISM_SPOTS.length);
+
+    const worldSpots = filterSpots(TOURISM_SPOTS, 'world');
+    expect(worldSpots.length).toBeGreaterThan(30);
+    expect(worldSpots.every(s => s.worldHeritage)).toBe(true);
+
+    const natureSpots = filterSpots(TOURISM_SPOTS, 'nature');
+    expect(natureSpots.length).toBeGreaterThan(30);
+    expect(natureSpots.every(s => s.cat === 'nature')).toBe(true);
+  });
+});
+
